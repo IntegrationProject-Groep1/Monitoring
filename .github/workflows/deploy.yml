@@ -1,0 +1,46 @@
+name: Deploy Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"] # He listens here to the name of file 1 (has to be exact)
+    types:
+      - completed
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    # Only runs if CI passed and the branch is main, prod, or a version tag
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          #  Takes the code of the exact commit that just happened and succeeded
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Lowercase repo name
+        id: repo_name
+        run: echo "value=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ steps.repo_name.outputs.value }}:latest
+            ghcr.io/${{ steps.repo_name.outputs.value }}:${{ github.event.workflow_run.head_branch }}
