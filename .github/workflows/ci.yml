@@ -1,0 +1,21 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main", "dev", "prod" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "dev", "prod" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Tests (Placeholder)
+        run: |
+          echo "Teams: Add your own test commands here!"
+          echo "If these fail, Infra will NOT build the image."
+          exit 0
