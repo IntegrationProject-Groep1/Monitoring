@@ -2,47 +2,72 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
-    container_name: mon-elasticsearch
+    container_name: elasticsearch
+    restart: unless-stopped
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ES_ADMIN_PASS}
+      - ES_JAVA_OPTS=-Xms${ES_MEM_LIMIT} -Xmx${ES_MEM_LIMIT}
     ports:
-      - "9200:9200"
+      - "127.0.0.1:30060:9200"
     volumes:
       - es-data:/usr/share/elasticsearch/data
     networks:
-      - mon-net
+      - elk-net
+    healthcheck:
+      test: >
+        curl -s -o /dev/null -w "%{http_code}"
+        -u "${ES_ADMIN_USER}:${ES_ADMIN_PASS}"
+        http://localhost:9200/_cluster/health
+        | grep -qE "^(200)$"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   logstash:
     image: docker.elastic.co/logstash/logstash:8.17.0
-    container_name: mon-logstash
+    container_name: logstash
+    restart: unless-stopped
     environment:
       - xpack.monitoring.enabled=false
-      - ELASTICSEARCH_HOSTS=http://mon-elasticsearch:9200
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ES_ADMIN_USER=${ES_ADMIN_USER}
+      - ES_ADMIN_PASS=${ES_ADMIN_PASS}
+      - RABBITMQ_HOST=${RABBITMQ_HOST}
+      - RABBITMQ_PORT=${RABBITMQ_PORT}
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASS=${RABBITMQ_PASS}
+      - RABBITMQ_VHOST=${RABBITMQ_VHOST}
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline
     networks:
-      - mon-net
+      - elk-net
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.17.0
-    container_name: mon-kibana
+    container_name: kibana
+    restart: unless-stopped
     environment:
-      - ELASTICSEARCH_HOSTS=http://mon-elasticsearch:9200
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASS}
+      - XPACK_SECURITY_ENABLED=true
     ports:
-      - "5601:5601"
+      - "127.0.0.1:30061:5601"
     networks:
-      - mon-net
+      - elk-net
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
 
 volumes:
   es-data:
 
 networks:
-  mon-net:
-    name: mon-net
-    external: true
+  elk-net:
+    name: elk-net
