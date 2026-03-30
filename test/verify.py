@@ -23,7 +23,7 @@ TODAY = datetime.now(timezone.utc).strftime("%Y.%m.%d")
 NORMAL_INDEX = f"heartbeats-{TODAY}"
 QUARANTINE_INDEX = f"heartbeats-quarantine-{TODAY}"
 
-EXPECTED_TEAMS = ["team-planning", "team-crm", "team-kassa", "team-facturatie", "team-monitoring"]
+EXPECTED_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
 
 
 def es_request(path: str) -> dict:
@@ -54,21 +54,21 @@ def wait_for_documents(index: str, min_count: int, retries: int = 12, interval: 
     return 0
 
 
-def check_teams_present() -> bool:
+def check_systems_present() -> bool:
     try:
         result = es_request(
-            f"/{NORMAL_INDEX}/_search?size=100&_source=team"
+            f"/{NORMAL_INDEX}/_search?size=100&_source=system"
         )
         hits = result.get("hits", {}).get("hits", [])
-        found_teams = {h["_source"].get("team") for h in hits}
-        missing = [t for t in EXPECTED_TEAMS if t not in found_teams]
+        found_systems = {h["_source"].get("system") for h in hits}
+        missing = [s for s in EXPECTED_SYSTEMS if s not in found_systems]
         if missing:
-            print(f"  FAIL: missing teams in normal index: {missing}")
+            print(f"  FAIL: missing systems in normal index: {missing}")
             return False
-        print(f"  OK: all expected teams present: {sorted(found_teams)}")
+        print(f"  OK: all expected systems present: {sorted(found_systems)}")
         return True
     except Exception as e:
-        print(f"  FAIL: could not query teams: {e}")
+        print(f"  FAIL: could not query systems: {e}")
         return False
 
 
@@ -76,16 +76,16 @@ def main() -> None:
     print(f"Verifying ELK pipeline against {ES_HOST}\n")
     failures = []
 
-    print(f"Checking normal index ({NORMAL_INDEX}) — expecting >= {len(EXPECTED_TEAMS)} docs:")
-    count = wait_for_documents(NORMAL_INDEX, len(EXPECTED_TEAMS))
-    if count < len(EXPECTED_TEAMS):
-        failures.append(f"Normal index has {count} docs, expected >= {len(EXPECTED_TEAMS)}")
+    print(f"Checking normal index ({NORMAL_INDEX}) — expecting >= {len(EXPECTED_SYSTEMS)} docs:")
+    count = wait_for_documents(NORMAL_INDEX, len(EXPECTED_SYSTEMS))
+    if count < len(EXPECTED_SYSTEMS):
+        failures.append(f"Normal index has {count} docs, expected >= {len(EXPECTED_SYSTEMS)}")
     else:
         print(f"  OK: {count} documents found")
 
-    print(f"\nChecking team mapping in normal index:")
-    if not check_teams_present():
-        failures.append("Not all expected teams found in normal index")
+    print(f"\nChecking all systems present in normal index:")
+    if not check_systems_present():
+        failures.append("Not all expected systems found in normal index")
 
     print(f"\nChecking quarantine index ({QUARANTINE_INDEX}) — expecting >= 2 docs:")
     q_count = wait_for_documents(QUARANTINE_INDEX, 2)

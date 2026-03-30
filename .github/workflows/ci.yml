@@ -48,7 +48,7 @@ jobs:
         run: docker compose -f test/docker-compose.yml up -d --wait --wait-timeout 60
 
       - name: Start Elasticsearch and Logstash
-        run: docker compose -f monitoring_elk/docker-compose.yml up -d --wait --wait-timeout 120 elasticsearch logstash
+        run: docker compose -f monitoring_elk/docker-compose.yml up -d --wait --wait-timeout 60 elasticsearch logstash
 
       - name: Set up Python
         uses: actions/setup-python@v5
