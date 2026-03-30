@@ -13,6 +13,7 @@ import time
 import urllib.request
 import urllib.error
 import json
+import base64
 from datetime import datetime, timezone
 
 ES_HOST = os.environ.get("ES_HOST", "http://localhost:30060")
