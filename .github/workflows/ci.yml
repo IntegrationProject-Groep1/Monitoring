@@ -8,14 +8,77 @@ on:
     branches: [ "main", "dev", "prod" ]
 
 jobs:
-  test:
+
+  validate:
+    name: Validate configs
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Tests (Placeholder)
+      - name: Validate docker-compose syntax
+        run: docker compose -f monitoring_elk/docker-compose.yml config --quiet
+
+  integration-test:
+    name: Integration test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: validate
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Write test .env
+        env:
+          ENV_CONTENT: |
+            ES_ADMIN_USER=elastic
+            ES_ADMIN_PASS=elk123
+            ES_MEM_LIMIT=512m
+            KIBANA_SYSTEM_PASS=kibana123
+            RABBITMQ_HOST=rabbitmq-test
+            RABBITMQ_PORT=5672
+            RABBITMQ_USER=guest
+            RABBITMQ_PASS=guest
+            RABBITMQ_VHOST=/
+        run: echo "$ENV_CONTENT" > monitoring_elk/.env
+
+      - name: Start RabbitMQ
+        run: docker compose -f test/docker-compose.yml up -d --wait
+      - name: Start Elasticsearch and Logstash
+        run: docker compose -f monitoring_elk/docker-compose.yml up -d --wait --wait-timeout 60 elasticsearch logstash
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install -r test/requirements.txt
+
+      - name: Send test heartbeats
+        run: python test/producer.py
+
+      - name: Verify documents indexed in Elasticsearch
+        run: python test/verify.py
+        env:
+          ES_HOST: http://localhost:30060
+          ES_ADMIN_USER: elastic
+          ES_ADMIN_PASS: elk123
+
+      - name: Dump logs on failure
+        if: failure()
         run: |
-          echo "Teams: Add your own test commands here!"
-          echo "If these fail, Infra will NOT build the image."
-          exit 0
+          echo "=== Logstash ==="
+          docker compose -f monitoring_elk/docker-compose.yml logs logstash
+          echo "=== Elasticsearch ==="
+          docker compose -f monitoring_elk/docker-compose.yml logs elasticsearch
+          echo "=== RabbitMQ ==="
+          docker compose -f test/docker-compose.yml logs rabbitmq
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f monitoring_elk/docker-compose.yml down
+          docker compose -f test/docker-compose.yml down
