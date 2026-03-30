@@ -1,2 +1,5 @@
 .env
 es-data/
+.venv/
+__pycache__/
+*.pyc
