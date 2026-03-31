@@ -17,6 +17,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Write test .env
+        env:
+          ENV_CONTENT: |
+            ES_ADMIN_USER=elastic
+            ES_ADMIN_PASS=elk123
+            ES_MEM_LIMIT=512m
+            KIBANA_SYSTEM_PASS=kibana123
+            RABBITMQ_HOST=rabbitmq-test
+            RABBITMQ_PORT=5672
+            RABBITMQMONITORING_USER=guest
+            RABBITMQMONITORING_PASS=guest
+            RABBITMQ_VHOST=/
+        run: echo "$ENV_CONTENT" > monitoring_elk/.env
+
       - name: Validate docker-compose syntax
         run: docker compose --env-file monitoring_elk/.env -f docker-compose.yml config --quiet
 
