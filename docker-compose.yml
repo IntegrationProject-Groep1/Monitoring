@@ -41,7 +41,7 @@ services:
       - RABBITMQMONITORING_PASS=${RABBITMQMONITORING_PASS}
       - RABBITMQ_VHOST=${RABBITMQ_VHOST}
     volumes:
-      - ./logstash/pipeline:/usr/share/logstash/pipeline
+      - ./monitoring_elk/logstash/pipeline:/usr/share/logstash/pipeline
     networks:
       - elk-net
     depends_on:
