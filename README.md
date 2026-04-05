@@ -1,17 +1,17 @@
 # Monitoring — ELK Heartbeat Stack
 
-Dit is de centrale monitoring-repository van het integratieproject. De stack ontvangt elke seconde een XML-heartbeat van elke deelnemende service via RabbitMQ, verwerkt die in Logstash, en indexeert het resultaat in Elasticsearch. Kibana biedt een dashboard om de status van alle teams in realtime te bekijken.
+This is the central monitoring repository of the integration project. The stack receives an XML heartbeat from every participating service via RabbitMQ every second, processes it in Logstash, and indexes the result in Elasticsearch. Kibana provides a dashboard to view the status of all teams in real-time.
 
-## Wat het doet
+## What it does
 
-- Elke service draait een sidecar die elke seconde een heartbeat-XML publiceert naar de RabbitMQ-queue `heartbeat`
-- Logstash consumeert die queue, parsed de XML, mapt de `system`-naam naar een team, en indexeert het document
-- Berichten met een ongeldige XML, onbekende `system`-naam of slechte timestamp gaan naar een quarantine-index
-- Kibana visualiseert de uptime en status per team
+- Each service runs a sidecar that publishes a heartbeat XML to the RabbitMQ queue `heartbeat` every second 
+- Logstash consumes that queue, parses the XML, maps the `system` name to a team, and indexes the document
+- Messages with invalid XML, an unknown `system` name, or an incorrect timestamp are sent to a quarantine index
+- Kibana visualizes the uptime and status per team
 
-## Gemonitorde teams
+## Monitored teams
 
-| Team | `system`-naam in heartbeat |
+| Team | `system` name in heartbeat |
 |---|---|
 | Planning | `planning` |
 | CRM | `crm` |
@@ -19,26 +19,26 @@ Dit is de centrale monitoring-repository van het integratieproject. De stack ont
 | Facturatie | `facturatie` |
 | Monitoring | `monitoring` |
 
-De `system`-naam moet exact overeenkomen (case-insensitive). Nieuwe teams toevoegen gaat via de mapping in `monitoring_elk/logstash/pipeline/logstash.conf`.
+The `system` name must match exactly (case-insensitive). Adding new teams is handled via the mapping in `monitoring_elk/logstash/pipeline/logstash.conf`.
 
-## Poorten
+## Ports
 
-| Service | Host-poort | Gebruik |
+| Service | Host port | Usage |
 |---|---|---|
-| Elasticsearch REST API | `30060` | Interne queries, ILM-beleid instellen |
-| Kibana UI | `30061` | Dashboard, login voor teamleden |
+| Elasticsearch REST API | `30060` | Internal queries, setting ILM policies |
+| Kibana UI | `30061` | Dashboard, login for team members |
 
-## Elasticsearch-indices
+## Elasticsearch Indices
 
-| Index | Inhoud |
+| Index | Content |
 |---|---|
-| `heartbeats-YYYY.MM.dd` | Geldige, verwerkte heartbeats |
-| `heartbeats-quarantine-YYYY.MM.dd` | Ongeldige XML, onbekende systemen, slechte timestamps |
+| `heartbeats-YYYY.MM.dd` | Valid, processed heartbeats |
+| `heartbeats-quarantine-YYYY.MM.dd` | Invalid XML, unknown systems, incorrect timestamps |
 
-## Authenticatie
+## Authentication
 
-| Account | Gebruik |
+| Account | Usage |
 |---|---|
-| `elastic` | Beheer-login voor Kibana en directe ES-queries |
-| `kibana_system` | Interne service-account voor Kibana (niet voor inloggen) |
-| `monitoring_rabbitmq` | RabbitMQ-gebruiker voor Logstash |
+| `elastic` | Administrative login for Kibana and direct ES queries |
+| `kibana_system` | Internal service account for Kibana (not for logging in) |
+| `monitoring_rabbitmq` | RabbitMQ user for Logstash |
