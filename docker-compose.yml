@@ -68,14 +68,17 @@ services:
   detector-service:
     build: ./detector
     container_name: detector-service
+    init: true
     environment:
       - ES_HOST=http://elasticsearch:9200
       - ES_ADMIN_USER=${ES_ADMIN_USER}
       - ES_ADMIN_PASS=${ES_ADMIN_PASS}
       - RABBITMQ_HOST=rabbitmq
     depends_on:
-      - elasticsearch
-      - rabbitmq
+      elasticsearch:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - elk-net
 
