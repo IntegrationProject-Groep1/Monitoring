@@ -20,6 +20,8 @@ import pika
 
 RABBITMQ_HOST = os.environ.get("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.environ.get("RABBITMQ_PORT", "5672"))
+RABBITMQ_USER = os.environ["RABBITMQMONITORING_USER"]
+RABBITMQ_PASS = os.environ["RABBITMQMONITORING_PASS"]
 QUEUE = "heartbeat"
 
 KNOWN_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
@@ -35,7 +37,7 @@ def build_heartbeat(system: str, uptime: int) -> str:
 
 
 def connect(retries: int = 10) -> tuple:
-    credentials = pika.PlainCredentials("guest", "guest")
+    credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
     for attempt in range(1, retries + 1):
         try:
             connection = pika.BlockingConnection(

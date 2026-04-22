@@ -2,6 +2,10 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: rabbitmq-test
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQMONITORING_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQMONITORING_PASS}
+      - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_VHOST}
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -13,6 +17,11 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  detector-service:
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
 networks:
   elk-net:

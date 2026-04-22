@@ -39,16 +39,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push detector image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./detector
           push: true
-          # THE FIX: We now provide three tags for the image:
-          # 1. ':latest' - For Watchtower to automatically pull the newest version.
-          # 2. ':vX.X.X' - Using the branch/tag name (e.g., v1.2.1) for easy rollbacks and identification.
-          # 3. ':SHA'    - Using the unique commit hash as a fallback for absolute version tracking.
           tags: |
-            ghcr.io/${{ steps.repo_name.outputs.value }}:latest
-            ghcr.io/${{ steps.repo_name.outputs.value }}:${{ github.event.workflow_run.head_branch }}
-            ghcr.io/${{ steps.repo_name.outputs.value }}:${{ github.event.workflow_run.head_sha }}
+            ghcr.io/${{ steps.repo_name.outputs.value }}/detector:latest
+            ghcr.io/${{ steps.repo_name.outputs.value }}/detector:${{ github.event.workflow_run.head_branch }}
+            ghcr.io/${{ steps.repo_name.outputs.value }}/detector:${{ github.event.workflow_run.head_sha }}

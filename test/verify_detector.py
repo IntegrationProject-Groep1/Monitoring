@@ -13,13 +13,15 @@ import pika
 
 RABBITMQ_HOST = os.environ.get("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.environ.get("RABBITMQ_PORT", "5672"))
+RABBITMQ_USER = os.environ["RABBITMQMONITORING_USER"]
+RABBITMQ_PASS = os.environ["RABBITMQMONITORING_PASS"]
 QUEUE = "to_mailing"
 TIMEOUT_SECONDS = 20
 POLL_INTERVAL = 0.5
 
 
 def main() -> None:
-    credentials = pika.PlainCredentials("guest", "guest")
+    credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
     connection = pika.BlockingConnection(
         pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT, credentials=credentials)
     )

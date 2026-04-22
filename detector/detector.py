@@ -1,14 +1,26 @@
 import time
 import os
+import logging
 import pika
-from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from elasticsearch import Elasticsearch
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("detector")
 
 # Configuraties (via Env)
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 ES_USER = os.getenv("ES_ADMIN_USER", "elastic")
 ES_PASS = os.getenv("ES_ADMIN_PASS")
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_HOST = os.environ["RABBITMQ_HOST"]
+RABBITMQ_PORT = int(os.environ["RABBITMQ_PORT"])
+RABBITMQ_USER = os.environ["RABBITMQMONITORING_USER"]
+RABBITMQ_PASS = os.environ["RABBITMQMONITORING_PASS"]
+RABBITMQ_VHOST = os.environ["RABBITMQ_VHOST"]
 THRESHOLD_SECONDS = 3
 COOLDOWN_MINUTES = 5
 
@@ -17,20 +29,28 @@ cooldown_list = {} # Om spam te voorkomen: { "kassa": timestamp_last_alert }
 
 def send_alert_xml(system_name):
     """Bouwt en verstuurt de Alert XML naar de mailing queue."""
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+    credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+    connection = pika.BlockingConnection(pika.ConnectionParameters(
+        host=RABBITMQ_HOST,
+        port=RABBITMQ_PORT,
+        virtual_host=RABBITMQ_VHOST,
+        credentials=credentials,
+    ))
     channel = connection.channel()
     channel.queue_declare(queue="to_mailing", durable=True)
     
-    xml_payload = f"""<alert>
-    <type>HEARTBEAT_CRITICAL</type>
-    <system>{system_name}</system>
-    <message>Systeem {system_name} heeft al meer dan {THRESHOLD_SECONDS}s geen heartbeat gestuurd.</message>
-    <timestamp>{datetime.now().isoformat()}</timestamp>
-</alert>"""
+    alert = ET.Element("alert")
+    ET.SubElement(alert, "type").text = "HEARTBEAT_CRITICAL"
+    ET.SubElement(alert, "system").text = system_name
+    ET.SubElement(alert, "message").text = (
+        f"Systeem {system_name} heeft al meer dan {THRESHOLD_SECONDS}s geen heartbeat gestuurd."
+    )
+    ET.SubElement(alert, "timestamp").text = datetime.now(timezone.utc).isoformat()
+    xml_payload = ET.tostring(alert, encoding="unicode")
 
     channel.basic_publish(exchange='', routing_key='to_mailing', body=xml_payload)
     connection.close()
-    print(f"Alert verzonden voor {system_name}")
+    logger.info("Alert verzonden voor %s", system_name)
 
 while True:
     try:
@@ -46,7 +66,7 @@ while True:
             },
         )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         for bucket in res['aggregations']['systems']['buckets']:
             system = bucket['key']
@@ -63,10 +83,9 @@ while True:
             else:
                 # Systeem is weer up? Haal uit cooldown
                 if system in cooldown_list:
-                    print(f"{system} is weer online.")
+                    logger.info("%s is weer online.", system)
                     del cooldown_list[system]
 
-    except Exception as e:
-        print(f"Fout in detector: {e}")
-
+    except Exception:
+        logger.exception("Fout in detector")
     time.sleep(1) # Check elke seconde
