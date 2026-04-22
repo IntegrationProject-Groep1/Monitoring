@@ -61,7 +61,7 @@ jobs:
       - name: Start RabbitMQ
         run: docker compose -f test/docker-compose.yml up -d --wait
       - name: Start Elasticsearch and Logstash
-        run: docker compose --env-file monitoring_elk/.env -f docker-compose.yml up -d --wait --wait-timeout 60 elasticsearch logstash
+        run: docker compose --env-file monitoring_elk/.env -f docker-compose.yml up -d --wait --wait-timeout 60 elasticsearch logstash detector-service
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -88,6 +88,8 @@ jobs:
           docker compose --env-file monitoring_elk/.env -f docker-compose.yml logs logstash
           echo "=== Elasticsearch ==="
           docker compose --env-file monitoring_elk/.env -f docker-compose.yml logs elasticsearch
+          echo "=== Detector Service ==="
+          docker compose --env-file monitoring_elk/.env -f docker-compose.yml logs detector-service
           echo "=== RabbitMQ ==="
           docker compose -f test/docker-compose.yml logs rabbitmq
 
