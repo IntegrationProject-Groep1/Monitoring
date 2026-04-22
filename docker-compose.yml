@@ -65,6 +65,18 @@ services:
       elasticsearch:
         condition: service_healthy
 
+  detector-service:
+    build: ./detector
+    container_name: detector-service
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - RABBITMQ_HOST=rabbitmq
+    depends_on:
+      - elasticsearch
+      - rabbitmq
+    networks:
+      - elk-net
+
 volumes:
   es-data:
 
