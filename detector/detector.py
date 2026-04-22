@@ -35,15 +35,16 @@ def send_alert_xml(system_name):
 while True:
     try:
         # Query: Zoek de laatste heartbeat per systeem
-        res = es.search(index="heartbeats-*", body={
-            "size": 0,
-            "aggs": {
+        res = es.search(
+            index="heartbeats-*",
+            size=0,
+            aggs={
                 "systems": {
                     "terms": {"field": "system.keyword"},
-                    "aggs": { "last_heartbeat": {"max": {"field": "@timestamp"}} }
+                    "aggs": {"last_heartbeat": {"max": {"field": "@timestamp"}}},
                 }
-            }
-        })
+            },
+        )
 
         now = datetime.utcnow()
 
