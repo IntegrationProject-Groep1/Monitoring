@@ -50,7 +50,7 @@ while True:
 
         for bucket in res['aggregations']['systems']['buckets']:
             system = bucket['key']
-            last_ts = datetime.fromtimestamp(bucket['last_heartbeat']['value'] / 1000.0)
+            last_ts = datetime.fromtimestamp(bucket['last_heartbeat']['value'] / 1000.0, tz=timezone.utc)
             
             diff = (now - last_ts).total_seconds()
 
