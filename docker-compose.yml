@@ -70,6 +70,8 @@ services:
     container_name: detector-service
     environment:
       - ES_HOST=http://elasticsearch:9200
+      - ES_ADMIN_USER=${ES_ADMIN_USER}
+      - ES_ADMIN_PASS=${ES_ADMIN_PASS}
       - RABBITMQ_HOST=rabbitmq
     depends_on:
       - elasticsearch

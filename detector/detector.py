@@ -6,11 +6,13 @@ from elasticsearch import Elasticsearch
 
 # Configuraties (via Env)
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
+ES_USER = os.getenv("ES_ADMIN_USER", "elastic")
+ES_PASS = os.getenv("ES_ADMIN_PASS")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 THRESHOLD_SECONDS = 3
 COOLDOWN_MINUTES = 5
 
-es = Elasticsearch([ES_HOST])
+es = Elasticsearch([ES_HOST], basic_auth=(ES_USER, ES_PASS) if ES_PASS else None)
 cooldown_list = {} # Om spam te voorkomen: { "kassa": timestamp_last_alert }
 
 def send_alert_xml(system_name):
