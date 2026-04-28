@@ -26,13 +26,24 @@ jobs:
             KIBANA_SYSTEM_PASS=kibana123
             RABBITMQ_HOST=rabbitmq-test
             RABBITMQ_PORT=5672
-            RABBITMQMONITORING_USER=guest
-            RABBITMQMONITORING_PASS=guest
+            RABBITMQMONITORING_USER=monitoring_test
+            RABBITMQMONITORING_PASS=monitoring_test_pass
             RABBITMQ_VHOST=/
         run: echo "$ENV_CONTENT" > monitoring_elk/.env
 
       - name: Validate docker-compose syntax
-        run: docker compose --env-file monitoring_elk/.env -f docker-compose.yml config --quiet
+        run: |
+          docker compose --env-file monitoring_elk/.env \
+            -f docker-compose.yml -f test/docker-compose.yml \
+            config --quiet
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax-check detector
+        run: python -m py_compile detector/detector.py
 
   integration-test:
     name: Integration test
@@ -53,15 +64,17 @@ jobs:
             KIBANA_SYSTEM_PASS=kibana123
             RABBITMQ_HOST=rabbitmq-test
             RABBITMQ_PORT=5672
-            RABBITMQMONITORING_USER=guest
-            RABBITMQMONITORING_PASS=guest
+            RABBITMQMONITORING_USER=monitoring_test
+            RABBITMQMONITORING_PASS=monitoring_test_pass
             RABBITMQ_VHOST=/
         run: echo "$ENV_CONTENT" > monitoring_elk/.env
 
-      - name: Start RabbitMQ
-        run: docker compose -f test/docker-compose.yml up -d --wait
-      - name: Start Elasticsearch and Logstash
-        run: docker compose --env-file monitoring_elk/.env -f docker-compose.yml up -d --wait --wait-timeout 60 elasticsearch logstash
+      - name: Start stack (RabbitMQ + ELK + detector)
+        run: |
+          docker compose --env-file monitoring_elk/.env \
+            -f docker-compose.yml -f test/docker-compose.yml \
+            up -d --wait --wait-timeout 90 \
+            rabbitmq elasticsearch logstash detector-service
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -73,6 +86,11 @@ jobs:
 
       - name: Send test heartbeats
         run: python test/producer.py
+        env:
+          RABBITMQ_HOST: localhost
+          RABBITMQ_PORT: 5672
+          RABBITMQMONITORING_USER: monitoring_test
+          RABBITMQMONITORING_PASS: monitoring_test_pass
 
       - name: Verify documents indexed in Elasticsearch
         run: python test/verify.py
@@ -81,18 +99,23 @@ jobs:
           ES_ADMIN_USER: elastic
           ES_ADMIN_PASS: elk123
 
+      - name: Verify detector emits alert
+        run: python test/verify_detector.py
+        env:
+          RABBITMQ_HOST: localhost
+          RABBITMQ_PORT: 5672
+          RABBITMQMONITORING_USER: monitoring_test
+          RABBITMQMONITORING_PASS: monitoring_test_pass
+
       - name: Dump logs on failure
         if: failure()
         run: |
-          echo "=== Logstash ==="
-          docker compose --env-file monitoring_elk/.env -f docker-compose.yml logs logstash
-          echo "=== Elasticsearch ==="
-          docker compose --env-file monitoring_elk/.env -f docker-compose.yml logs elasticsearch
-          echo "=== RabbitMQ ==="
-          docker compose -f test/docker-compose.yml logs rabbitmq
+          docker compose --env-file monitoring_elk/.env \
+            -f docker-compose.yml -f test/docker-compose.yml \
+            logs --no-color
 
       - name: Tear down
         if: always()
         run: |
-          docker compose --env-file monitoring_elk/.env -f docker-compose.yml down
-          docker compose -f test/docker-compose.yml down
+          docker compose --env-file monitoring_elk/.env \
+            -f docker-compose.yml -f test/docker-compose.yml down -v

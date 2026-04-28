@@ -30,7 +30,6 @@ EXPECTED_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
 def es_request(path: str) -> dict:
     url = f"{ES_HOST}{path}"
     req = urllib.request.Request(url)
-    import base64
     token = base64.b64encode(f"{ES_USER}:{ES_PASS}".encode()).decode()
     req.add_header("Authorization", f"Basic {token}")
     with urllib.request.urlopen(req, timeout=10) as resp:
