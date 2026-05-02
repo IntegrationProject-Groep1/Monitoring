@@ -13,6 +13,7 @@ Exits 0 if all messages are published successfully, non-zero on any error.
 import os
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
@@ -24,16 +25,25 @@ RABBITMQ_USER = os.environ["RABBITMQMONITORING_USER"]
 RABBITMQ_PASS = os.environ["RABBITMQMONITORING_PASS"]
 QUEUE = "heartbeat"
 
-KNOWN_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
+KNOWN_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "identity-service"]
 
 
-def build_heartbeat(system: str, uptime: int) -> str:
+def build_heartbeat(system: str, uptime: int, status: str = "online") -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    root = ET.Element("heartbeat")
-    ET.SubElement(root, "system").text = system
-    ET.SubElement(root, "timestamp").text = timestamp
-    ET.SubElement(root, "uptime").text = str(uptime)
-    return ET.tostring(root, encoding="unicode")
+    message = ET.Element("message")
+
+    header = ET.SubElement(message, "header")
+    ET.SubElement(header, "message_id").text = str(uuid.uuid4())
+    ET.SubElement(header, "timestamp").text = timestamp
+    ET.SubElement(header, "source").text = system
+    ET.SubElement(header, "type").text = "heartbeat"
+    ET.SubElement(header, "version").text = "2.0"
+
+    body = ET.SubElement(message, "body")
+    ET.SubElement(body, "status").text = status
+    ET.SubElement(body, "uptime").text = str(uptime)
+
+    return ET.tostring(message, encoding="unicode")
 
 
 def connect(retries: int = 10) -> tuple:
@@ -71,12 +81,15 @@ def main() -> None:
     for i, system in enumerate(KNOWN_SYSTEMS, start=1):
         publish(channel, build_heartbeat(system, i * 10), f"system={system}")
 
+    print("\nSending offline heartbeat (status=offline, no uptime):")
+    publish(channel, build_heartbeat(KNOWN_SYSTEMS[0], 0, "offline"), f"system={KNOWN_SYSTEMS[0]} offline")
+
     print("\nSending edge-case messages (should be quarantined by Logstash):")
     publish(channel, build_heartbeat("unknown-team", 1), "unknown system name")
     publish(channel, "this is not valid xml <<<", "invalid XML")
 
     connection.close()
-    print(f"\nDone. {len(KNOWN_SYSTEMS) + 2} messages published to queue '{QUEUE}'.")
+    print(f"\nDone. {len(KNOWN_SYSTEMS) + 3} messages published to queue '{QUEUE}'.")
 
 
 if __name__ == "__main__":
