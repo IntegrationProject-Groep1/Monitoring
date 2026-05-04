@@ -1,8 +1,10 @@
 """
-Verifies that the ELK stack indexed heartbeat documents after the producer ran.
+Verifies that the ELK stack indexed heartbeat and platform-log documents
+after the producer ran.
 
-Queries Elasticsearch for today's heartbeats-* and heartbeats-quarantine-* indices
-and checks that the expected documents are present.
+Queries Elasticsearch for today's heartbeats-*, heartbeats-quarantine-*,
+logs-* and logs-quarantine-* indices and checks that the expected documents
+are present.
 
 Exits 0 if all checks pass, 1 on any failure.
 """
@@ -21,10 +23,13 @@ ES_USER = os.environ.get("ES_ADMIN_USER", "elastic")
 ES_PASS = os.environ.get("ES_ADMIN_PASS", "elk123")
 
 TODAY = datetime.now(timezone.utc).strftime("%Y.%m.%d")
-NORMAL_INDEX = f"heartbeats-{TODAY}"
-QUARANTINE_INDEX = f"heartbeats-quarantine-{TODAY}"
+HEARTBEATS_INDEX = f"heartbeats-{TODAY}"
+HEARTBEATS_QUARANTINE_INDEX = f"heartbeats-quarantine-{TODAY}"
+LOGS_INDEX = f"logs-{TODAY}"
+LOGS_QUARANTINE_INDEX = f"logs-quarantine-{TODAY}"
 
-EXPECTED_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
+EXPECTED_HEARTBEAT_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
+EXPECTED_LOG_SOURCES = ["planning", "crm", "kassa", "facturatie", "frontend", "mailing"]
 
 
 def es_request(path: str) -> dict:
@@ -54,21 +59,19 @@ def wait_for_documents(index: str, min_count: int, retries: int = 12, interval: 
     return 0
 
 
-def check_systems_present() -> bool:
+def check_field_values(index: str, field: str, expected: list[str], label: str) -> bool:
     try:
-        result = es_request(
-            f"/{NORMAL_INDEX}/_search?size=100&_source=system"
-        )
+        result = es_request(f"/{index}/_search?size=200&_source={field}")
         hits = result.get("hits", {}).get("hits", [])
-        found_systems = {h["_source"].get("system") for h in hits}
-        missing = [s for s in EXPECTED_SYSTEMS if s not in found_systems]
+        found = {h["_source"].get(field) for h in hits}
+        missing = [v for v in expected if v not in found]
         if missing:
-            print(f"  FAIL: missing systems in normal index: {missing}")
+            print(f"  FAIL: missing {label} in {index}: {missing}")
             return False
-        print(f"  OK: all expected systems present: {sorted(found_systems)}")
+        print(f"  OK: all expected {label} present in {index}: {sorted(v for v in found if v)}")
         return True
     except Exception as e:
-        print(f"  FAIL: could not query systems: {e}")
+        print(f"  FAIL: could not query {label} in {index}: {e}")
         return False
 
 
@@ -76,21 +79,39 @@ def main() -> None:
     print(f"Verifying ELK pipeline against {ES_HOST}\n")
     failures = []
 
-    print(f"Checking normal index ({NORMAL_INDEX}) — expecting >= {len(EXPECTED_SYSTEMS)} docs:")
-    count = wait_for_documents(NORMAL_INDEX, len(EXPECTED_SYSTEMS))
-    if count < len(EXPECTED_SYSTEMS):
-        failures.append(f"Normal index has {count} docs, expected >= {len(EXPECTED_SYSTEMS)}")
+    print(f"Checking heartbeats index ({HEARTBEATS_INDEX}) — expecting >= {len(EXPECTED_HEARTBEAT_SYSTEMS)} docs:")
+    count = wait_for_documents(HEARTBEATS_INDEX, len(EXPECTED_HEARTBEAT_SYSTEMS))
+    if count < len(EXPECTED_HEARTBEAT_SYSTEMS):
+        failures.append(f"{HEARTBEATS_INDEX} has {count} docs, expected >= {len(EXPECTED_HEARTBEAT_SYSTEMS)}")
     else:
         print(f"  OK: {count} documents found")
 
-    print(f"\nChecking all systems present in normal index:")
-    if not check_systems_present():
-        failures.append("Not all expected systems found in normal index")
+    print("\nChecking all expected systems present in heartbeats index:")
+    if not check_field_values(HEARTBEATS_INDEX, "system", EXPECTED_HEARTBEAT_SYSTEMS, "systems"):
+        failures.append("Not all expected systems found in heartbeats index")
 
-    print(f"\nChecking quarantine index ({QUARANTINE_INDEX}) — expecting >= 2 docs:")
-    q_count = wait_for_documents(QUARANTINE_INDEX, 2)
+    print(f"\nChecking heartbeats quarantine index ({HEARTBEATS_QUARANTINE_INDEX}) — expecting >= 2 docs:")
+    q_count = wait_for_documents(HEARTBEATS_QUARANTINE_INDEX, 2)
     if q_count < 2:
-        failures.append(f"Quarantine index has {q_count} docs, expected >= 2")
+        failures.append(f"{HEARTBEATS_QUARANTINE_INDEX} has {q_count} docs, expected >= 2")
+    else:
+        print(f"  OK: {q_count} documents found")
+
+    print(f"\nChecking logs index ({LOGS_INDEX}) — expecting >= {len(EXPECTED_LOG_SOURCES)} docs:")
+    count = wait_for_documents(LOGS_INDEX, len(EXPECTED_LOG_SOURCES))
+    if count < len(EXPECTED_LOG_SOURCES):
+        failures.append(f"{LOGS_INDEX} has {count} docs, expected >= {len(EXPECTED_LOG_SOURCES)}")
+    else:
+        print(f"  OK: {count} documents found")
+
+    print("\nChecking all expected sources present in logs index:")
+    if not check_field_values(LOGS_INDEX, "system", EXPECTED_LOG_SOURCES, "sources"):
+        failures.append("Not all expected sources found in logs index")
+
+    print(f"\nChecking logs quarantine index ({LOGS_QUARANTINE_INDEX}) — expecting >= 4 docs:")
+    q_count = wait_for_documents(LOGS_QUARANTINE_INDEX, 4)
+    if q_count < 4:
+        failures.append(f"{LOGS_QUARANTINE_INDEX} has {q_count} docs, expected >= 4")
     else:
         print(f"  OK: {q_count} documents found")
 
