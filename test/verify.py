@@ -28,8 +28,8 @@ HEARTBEATS_QUARANTINE_INDEX = f"heartbeats-quarantine-{TODAY}"
 LOGS_INDEX = f"logs-{TODAY}"
 LOGS_QUARANTINE_INDEX = f"logs-quarantine-{TODAY}"
 
-EXPECTED_HEARTBEAT_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring"]
-EXPECTED_LOG_SOURCES = ["planning", "crm", "kassa", "facturatie", "frontend", "mailing"]
+EXPECTED_HEARTBEAT_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "mailing"]
+EXPECTED_LOG_SOURCES = ["planning", "crm", "kassa", "facturatie", "frontend", "mailing", "identity-service"]
 
 
 def es_request(path: str) -> dict:
@@ -90,10 +90,10 @@ def main() -> None:
     if not check_field_values(HEARTBEATS_INDEX, "system", EXPECTED_HEARTBEAT_SYSTEMS, "systems"):
         failures.append("Not all expected systems found in heartbeats index")
 
-    print(f"\nChecking heartbeats quarantine index ({HEARTBEATS_QUARANTINE_INDEX}) — expecting >= 2 docs:")
-    q_count = wait_for_documents(HEARTBEATS_QUARANTINE_INDEX, 2)
-    if q_count < 2:
-        failures.append(f"{HEARTBEATS_QUARANTINE_INDEX} has {q_count} docs, expected >= 2")
+    print(f"\nChecking heartbeats quarantine index ({HEARTBEATS_QUARANTINE_INDEX}) — expecting >= 5 docs:")
+    q_count = wait_for_documents(HEARTBEATS_QUARANTINE_INDEX, 5)
+    if q_count < 5:
+        failures.append(f"{HEARTBEATS_QUARANTINE_INDEX} has {q_count} docs, expected >= 5")
     else:
         print(f"  OK: {q_count} documents found")
 
@@ -108,10 +108,10 @@ def main() -> None:
     if not check_field_values(LOGS_INDEX, "system", EXPECTED_LOG_SOURCES, "sources"):
         failures.append("Not all expected sources found in logs index")
 
-    print(f"\nChecking logs quarantine index ({LOGS_QUARANTINE_INDEX}) — expecting >= 4 docs:")
-    q_count = wait_for_documents(LOGS_QUARANTINE_INDEX, 4)
-    if q_count < 4:
-        failures.append(f"{LOGS_QUARANTINE_INDEX} has {q_count} docs, expected >= 4")
+    print(f"\nChecking logs quarantine index ({LOGS_QUARANTINE_INDEX}) — expecting >= 5 docs:")
+    q_count = wait_for_documents(LOGS_QUARANTINE_INDEX, 5)
+    if q_count < 5:
+        failures.append(f"{LOGS_QUARANTINE_INDEX} has {q_count} docs, expected >= 5")
     else:
         print(f"  OK: {q_count} documents found")
 

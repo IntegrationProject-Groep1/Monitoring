@@ -2,11 +2,13 @@
 Test producer for the heartbeat and platform-log pipelines.
 
 Sends XML messages to the 'heartbeat' and 'logs' RabbitMQ queues, covering
-all code paths in the Logstash pipeline:
-  - heartbeats: one valid per known system, one offline, one unknown system,
-    one invalid XML.
-  - logs: one valid info per known source, plus edge cases (wrong type,
-    unknown level, malformed XML).
+all code paths in the Logstash pipeline (per contract v2.3):
+  - heartbeats: one valid per heartbeat source + offline, plus edge cases
+    (unknown system, unknown status, missing uptime, identity-service which
+    is not in the heartbeat whitelist, malformed XML).
+  - logs: one valid info per log source + unknown_action soft-tag, plus
+    edge cases (unknown level, wrong type, unsupported version, monitoring
+    source which is not in the log whitelist, malformed XML).
 
 Exits 0 if all messages are published successfully, non-zero on any error.
 """
@@ -27,8 +29,8 @@ RABBITMQ_PASS = os.environ["RABBITMQMONITORING_PASS"]
 HEARTBEAT_QUEUE = "heartbeat"
 LOGS_QUEUE = "logs"
 
-KNOWN_SYSTEMS = ["planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "identity-service"]
-LOG_SOURCES = ["planning", "crm", "kassa", "facturatie", "frontend", "mailing"]
+HEARTBEAT_SOURCES = ["planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "mailing"]
+LOG_SOURCES = ["planning", "crm", "kassa", "facturatie", "frontend", "mailing", "identity-service"]
 
 
 def _envelope(source: str, msg_type: str, version: str = "2.0") -> tuple[ET.Element, ET.Element, ET.Element]:
@@ -44,10 +46,11 @@ def _envelope(source: str, msg_type: str, version: str = "2.0") -> tuple[ET.Elem
     return message, header, body
 
 
-def build_heartbeat(system: str, uptime: int, status: str = "online") -> str:
+def build_heartbeat(system: str, uptime: int | None, status: str = "online") -> str:
     message, _, body = _envelope(system, "heartbeat")
     ET.SubElement(body, "status").text = status
-    ET.SubElement(body, "uptime").text = str(uptime)
+    if uptime is not None:
+        ET.SubElement(body, "uptime").text = str(uptime)
     return ET.tostring(message, encoding="unicode")
 
 
@@ -90,18 +93,21 @@ def publish(channel, queue: str, body: str, label: str) -> None:
 def send_heartbeats() -> int:
     connection, channel = connect(HEARTBEAT_QUEUE)
 
-    print("\nSending valid heartbeats for all known systems:")
-    for i, system in enumerate(KNOWN_SYSTEMS, start=1):
+    print("\nSending valid heartbeats for all heartbeat sources:")
+    for i, system in enumerate(HEARTBEAT_SOURCES, start=1):
         publish(channel, HEARTBEAT_QUEUE, build_heartbeat(system, i * 10), f"system={system}")
 
-    print("\nSending offline heartbeat (status=offline, no uptime):")
-    publish(channel, HEARTBEAT_QUEUE, build_heartbeat(KNOWN_SYSTEMS[0], 0, "offline"), f"system={KNOWN_SYSTEMS[0]} offline")
+    print("\nSending offline heartbeat (status=offline, uptime=0):")
+    publish(channel, HEARTBEAT_QUEUE, build_heartbeat(HEARTBEAT_SOURCES[0], 0, "offline"), f"system={HEARTBEAT_SOURCES[0]} offline")
 
     print("\nSending edge-case heartbeats (should be quarantined by Logstash):")
     publish(channel, HEARTBEAT_QUEUE, build_heartbeat("unknown-team", 1), "unknown system name")
+    publish(channel, HEARTBEAT_QUEUE, build_heartbeat("crm", 1, status="banana"), "status=banana (unknown_status)")
+    publish(channel, HEARTBEAT_QUEUE, build_heartbeat("crm", None), "missing uptime (missing_uptime)")
+    publish(channel, HEARTBEAT_QUEUE, build_heartbeat("identity-service", 1), "source=identity-service (unknown_system for heartbeats)")
     publish(channel, HEARTBEAT_QUEUE, "this is not valid xml <<<", "invalid XML")
 
-    sent = len(KNOWN_SYSTEMS) + 3
+    sent = len(HEARTBEAT_SOURCES) + 6
     connection.close()
     return sent
 
@@ -145,9 +151,15 @@ def send_logs() -> int:
         build_log("crm", "info", "user", "Old contract version", version="1.0"),
         "version=1.0 (unsupported_contract_version)",
     )
+    publish(
+        channel,
+        LOGS_QUEUE,
+        build_log("monitoring", "info", "user", "Monitoring should not log to itself"),
+        "source=monitoring (unknown_system for logs)",
+    )
     publish(channel, LOGS_QUEUE, "this is not valid xml <<<", "invalid XML")
 
-    sent = len(LOG_SOURCES) + 5
+    sent = len(LOG_SOURCES) + 6
     connection.close()
     return sent
 

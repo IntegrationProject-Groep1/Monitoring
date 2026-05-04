@@ -12,20 +12,20 @@ This is the central monitoring repository of the integration project. The stack 
 
 ## Monitored teams
 
-The `source` value in the XML header (used for both heartbeats and logs) must be one of:
+The accepted `source` value in the XML header differs per pipeline (per contract v2.3):
 
-| Team | `source` value |
-|---|---|
-| Planning | `planning` |
-| CRM | `crm` |
-| Kassa | `kassa` |
-| Facturatie | `facturatie` |
-| Monitoring | `monitoring` |
-| Frontend | `frontend` |
-| Identity service | `identity-service` |
-| Mailing | `mailing` |
+| Team | Heartbeat | Log |
+|---|:---:|:---:|
+| Planning (`planning`) | ✓ | ✓ |
+| CRM (`crm`) | ✓ | ✓ |
+| Kassa (`kassa`) | ✓ | ✓ |
+| Facturatie (`facturatie`) | ✓ | ✓ |
+| Frontend (`frontend`) | ✓ | ✓ |
+| Mailing (`mailing`) | ✓ | ✓ |
+| Monitoring (`monitoring`) | ✓ | — |
+| Identity service (`identity-service`) | — | ✓ |
 
-Matching is case-insensitive (Logstash lowercases the value). Anything outside this list is sent to the quarantine index. Adding new teams is handled via the whitelist in `monitoring_elk/logstash/pipeline/logstash.conf`.
+Monitoring sends heartbeats but does not log to itself. Identity service is exempt from the heartbeat sidecar (RPC-only) but does emit logs. Anything outside the per-pipeline whitelist is sent to the quarantine index. Matching is case-insensitive — Logstash lowercases the value. Whitelists live in `monitoring_elk/logstash/pipeline/logstash.conf`.
 
 ## Ports
 
@@ -47,7 +47,7 @@ Matching is case-insensitive (Logstash lowercases the value). Anything outside t
 
 Both heartbeats and platform logs use the same `<message><header><body>` envelope. Header carries `message_id`, `timestamp` (UTC ISO 8601), `source`, `type` (`heartbeat` or `log`), and `version`.
 
-**Heartbeat body**: `status` (`online`/`offline`) and `uptime` (seconds, optional).
+**Heartbeat body**: `status` (`online`/`offline`) and `uptime` (seconds, integer, required).
 
 **Platform log body**: `level` (`info`/`warning`/`error`), `action` (a category from a closed set — see `logstash.conf`), and `message` (free text describing what happened). Log only at flow boundaries — successful completions, suspicious-but-non-critical events, or failures. Don't log every intermediate step.
 
