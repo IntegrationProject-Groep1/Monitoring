@@ -84,7 +84,7 @@ jobs:
       - name: Install test dependencies
         run: pip install -r test/requirements.txt
 
-      - name: Send test heartbeats
+      - name: Send test heartbeats and platform logs
         run: python test/producer.py
         env:
           RABBITMQ_HOST: localhost

@@ -1,25 +1,31 @@
-# Monitoring — ELK Heartbeat Stack
+# Monitoring — ELK Heartbeat & Log Stack
 
-This is the central monitoring repository of the integration project. The stack receives an XML heartbeat from every participating service via RabbitMQ every second, processes it in Logstash, and indexes the result in Elasticsearch. Kibana provides a dashboard to view the status of all teams in real-time.
+This is the central monitoring repository of the integration project. The stack receives XML heartbeats and platform logs from every participating service via RabbitMQ, processes them in Logstash, and indexes the result in Elasticsearch. Kibana provides a dashboard to view the status of all teams in real-time.
 
 ## What it does
 
-- Each service runs a sidecar that publishes a heartbeat XML to the RabbitMQ queue `heartbeat` every second 
-- Logstash consumes that queue, parses the XML, maps the `system` name to a team, and indexes the document
-- Messages with invalid XML, an unknown `system` name, or an incorrect timestamp are sent to a quarantine index
-- Kibana visualizes the uptime and status per team
+- Each service runs a sidecar that publishes a heartbeat XML to the RabbitMQ queue `heartbeat` every second
+- Each team also publishes platform logs (info / warning / error) to the RabbitMQ queue `logs` whenever a flow completes, something looks suspicious, or an error happens
+- Logstash consumes both queues, parses the XML envelope, maps the `source` to a team, and indexes the document
+- Messages with invalid XML, an unknown source, an incorrect timestamp, an unknown level, or the wrong `header.type` are sent to a per-pipeline quarantine index
+- Kibana visualizes the uptime and status per team and surfaces error/warning logs
 
 ## Monitored teams
 
-| Team | `system` name in heartbeat |
-|---|---|
-| Planning | `planning` |
-| CRM | `crm` |
-| Kassa | `kassa` |
-| Facturatie | `facturatie` |
-| Monitoring | `monitoring` |
+The accepted `source` value in the XML header differs per pipeline (per contract v2.3):
 
-The `system` name must match exactly (case-insensitive). Adding new teams is handled via the mapping in `monitoring_elk/logstash/pipeline/logstash.conf`.
+| Team | Heartbeat | Log |
+|---|:---:|:---:|
+| Planning (`planning`) | ✓ | ✓ |
+| CRM (`crm`) | ✓ | ✓ |
+| Kassa (`kassa`) | ✓ | ✓ |
+| Facturatie (`facturatie`) | ✓ | ✓ |
+| Frontend (`frontend`) | ✓ | ✓ |
+| Mailing (`mailing`) | ✓ | ✓ |
+| Monitoring (`monitoring`) | ✓ | — |
+| Identity service (`identity-service`) | — | ✓ |
+
+Monitoring sends heartbeats but does not log to itself. Identity service is exempt from the heartbeat sidecar (RPC-only) but does emit logs. Anything outside the per-pipeline whitelist is sent to the quarantine index. Matching is case-insensitive — Logstash lowercases the value. Whitelists live in `monitoring_elk/logstash/pipeline/logstash.conf`.
 
 ## Ports
 
@@ -33,7 +39,17 @@ The `system` name must match exactly (case-insensitive). Adding new teams is han
 | Index | Content |
 |---|---|
 | `heartbeats-YYYY.MM.dd` | Valid, processed heartbeats |
-| `heartbeats-quarantine-YYYY.MM.dd` | Invalid XML, unknown systems, incorrect timestamps |
+| `heartbeats-quarantine-YYYY.MM.dd` | Invalid XML, unknown source, bad timestamp, unsupported contract version |
+| `logs-YYYY.MM.dd` | Valid, processed platform logs |
+| `logs-quarantine-YYYY.MM.dd` | Invalid XML, unknown source, bad timestamp, wrong message type, unknown level, unsupported contract version |
+
+## Message contracts
+
+Both heartbeats and platform logs use the same `<message><header><body>` envelope. Header carries `message_id`, `timestamp` (UTC ISO 8601), `source`, `type` (`heartbeat` or `log`), and `version`.
+
+**Heartbeat body**: `status` (`online`/`offline`) and `uptime` (seconds, integer, required).
+
+**Platform log body**: `level` (`info`/`warning`/`error`), `action` (a category from a closed set — see `logstash.conf`), and `message` (free text describing what happened). Log only at flow boundaries — successful completions, suspicious-but-non-critical events, or failures. Don't log every intermediate step.
 
 ## Authentication
 
