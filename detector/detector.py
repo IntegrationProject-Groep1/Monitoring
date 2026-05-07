@@ -1,5 +1,6 @@
 ﻿import time
 import os
+import logging
 import pika
 import uuid
 from datetime import datetime, timedelta
@@ -7,12 +8,44 @@ from elasticsearch import Elasticsearch
 
 # Configuraties (via Env)
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+ES_USER = os.getenv("ES_ADMIN_USER", "elastic")
+ES_PASS = os.getenv("ES_ADMIN_PASS")
+RABBITMQ_HOST = os.environ["RABBITMQ_HOST"]
+RABBITMQ_PORT = int(os.environ["RABBITMQ_PORT"])
+RABBITMQ_USER = os.environ["RABBITMQMONITORING_USER"]
+RABBITMQ_PASS = os.environ["RABBITMQMONITORING_PASS"]
+RABBITMQ_VHOST = os.environ["RABBITMQ_VHOST"]
 THRESHOLD_SECONDS = 3
 COOLDOWN_MINUTES = 5
 
-es = Elasticsearch([ES_HOST])
-cooldown_list = {} # Om spam te voorkomen: { "kassa": timestamp_last_alert }
+es = Elasticsearch([ES_HOST], basic_auth=(ES_USER, ES_PASS) if ES_PASS else None)
+cooldown_list: dict[str, datetime] = {} # Om spam te voorkomen
+
+_rabbit_conn = None
+_rabbit_channel = None
+
+def _get_rabbit_channel():
+    """Geeft een open channel terug; (her)opent de verbinding indien nodig."""
+    global _rabbit_conn, _rabbit_channel
+    if (
+        _rabbit_conn is None
+        or _rabbit_conn.is_closed
+        or _rabbit_channel is None
+        or _rabbit_channel.is_closed
+    ):
+        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+        _rabbit_conn = pika.BlockingConnection(pika.ConnectionParameters(
+            host=RABBITMQ_HOST,
+            port=RABBITMQ_PORT,
+            virtual_host=RABBITMQ_VHOST,
+            credentials=credentials,
+            heartbeat=60,
+            blocked_connection_timeout=30,
+        ))
+        _rabbit_channel = _rabbit_conn.channel()
+        _rabbit_channel.queue_declare(queue="to_mailing", durable=True)
+        logger.info("RabbitMQ-verbinding opgezet")
+    return _rabbit_channel
 
 def send_alert_xml(system_name):
     """Bouwt en verstuurt de Alert XML naar de mailing queue conform v2.3 contract."""
@@ -45,17 +78,22 @@ def send_alert_xml(system_name):
 while True:
     try:
         # Query: Zoek de laatste heartbeat per systeem
-        res = es.search(index="heartbeats-*", body={
-            "size": 0,
-            "aggs": {
-                "systems": {
-                    "terms": {"field": "system.keyword"},
-                    "aggs": { "last_heartbeat": {"max": {"field": "@timestamp"}} }
-                }
-            }
-        })
+        try:
+            res = es.search(
+                index="heartbeats-*",
+                size=0,
+                aggs={
+                    "systems": {
+                        "terms": {"field": "system.keyword"},
+                        "aggs": {"last_heartbeat": {"max": {"field": "@timestamp"}}},
+                    }
+                },
+            )
+        except NotFoundError:
+            logger.debug("Index heartbeats-* bestaat nog niet; wachten op eerste heartbeat.")
+            res = {"aggregations": {"systems": {"buckets": []}}}
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         for bucket in res['aggregations']['systems']['buckets']:
             system = bucket['key']
@@ -72,10 +110,23 @@ while True:
             else:
                 # Systeem is weer up? Haal uit cooldown
                 if system in cooldown_list:
-                    print(f"{system} is weer online.")
+                    logger.info("%s is weer online.", system)
                     del cooldown_list[system]
 
-    except Exception as e:
-        print(f"Fout in detector: {e}")
+    except Exception:
+        logger.exception("Fout in detector")
+
+    # Houd de RabbitMQ-verbinding levend tijdens stille periodes.
+    if _rabbit_conn is not None and _rabbit_conn.is_open:
+        try:
+            _rabbit_conn.process_data_events(time_limit=0)
+        except pika.exceptions.AMQPError as exc:
+            logger.warning("Heartbeat-onderhoud mislukt: %s", exc)
+            try:
+                _rabbit_conn.close()
+            except Exception:
+                pass
+            _rabbit_conn = None
+            _rabbit_channel = None
 
     time.sleep(1) # Check elke seconde
