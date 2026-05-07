@@ -1,6 +1,7 @@
-import time
+﻿import time
 import os
 import pika
+import uuid
 from datetime import datetime, timedelta
 from elasticsearch import Elasticsearch
 
@@ -14,21 +15,32 @@ es = Elasticsearch([ES_HOST])
 cooldown_list = {} # Om spam te voorkomen: { "kassa": timestamp_last_alert }
 
 def send_alert_xml(system_name):
-    """Bouwt en verstuurt de Alert XML naar de mailing queue."""
+    """Bouwt en verstuurt de Alert XML naar de mailing queue conform v2.3 contract."""
     connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
     channel = connection.channel()
-    channel.queue_declare(queue="to_mailing", durable=True)
-    
-    xml_payload = f"""<alert>
-    <type>HEARTBEAT_CRITICAL</type>
-    <system>{system_name}</system>
-    <message>Systeem {system_name} heeft al meer dan {THRESHOLD_SECONDS}s geen heartbeat gestuurd.</message>
-    <timestamp>{datetime.now().isoformat()}</timestamp>
-</alert>"""
+    channel.queue_declare(queue="monitoring.alerts", durable=True)
 
-    channel.basic_publish(exchange='', routing_key='to_mailing', body=xml_payload)
+    msg_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat() + "Z"
+
+    xml_payload = f"""<message>
+  <header>
+    <message_id>{msg_id}</message_id>
+    <timestamp>{timestamp}</timestamp>
+    <source>monitoring</source>
+    <type>system_alert</type>
+    <version>2.0</version>
+  </header>
+  <body>
+    <system>{system_name}</system>
+    <status>down</status>
+    <message>Systeem {system_name} heeft al meer dan {THRESHOLD_SECONDS}s geen heartbeat gestuurd.</message>
+  </body>
+</message>"""
+
+    channel.basic_publish(exchange='', routing_key='monitoring.alerts', body=xml_payload)
     connection.close()
-    print(f"Alert verzonden voor {system_name}")
+    print(f"Standard Alert verzonden voor {system_name} (msg_id: {msg_id})")
 
 while True:
     try:
@@ -48,7 +60,7 @@ while True:
         for bucket in res['aggregations']['systems']['buckets']:
             system = bucket['key']
             last_ts = datetime.fromtimestamp(bucket['last_heartbeat']['value'] / 1000.0)
-            
+
             diff = (now - last_ts).total_seconds()
 
             if diff > THRESHOLD_SECONDS:
