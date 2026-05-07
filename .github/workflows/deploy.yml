@@ -1,20 +1,21 @@
 name: Deploy Pipeline
 
 on:
+  push:
+    branches: ["dev"]   # dev: build on every push, no tag required
   workflow_run:
     workflows: ["CI Pipeline"] # Must match the 'name' of your CI workflow exactly
     types:
       - completed
+  workflow_dispatch:
 
 jobs:
   build-and-push:
     name: Build and Push Docker Image
-    # Only deploy if the CI Pipeline was successful AND the trigger was a version tag (starts with 'v')
-    # This prevents development branches from being pushed to the production registry.
     if: >
-      github.event.workflow_run.conclusion == 'success' && 
-      (github.event.workflow_run.head_branch == null || 
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,12 +25,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Check out the specific commit SHA that passed the CI tests
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.workflow_run.head_sha }}
+
+      - name: Set Image Tag
+        id: vars
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            BRANCH="${GITHUB_REF#refs/heads/}"
+          else
+            BRANCH="${{ github.event.workflow_run.head_branch }}"
+          fi
+
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "tag=prod" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == "dev" ]]; then
+            echo "tag=dev" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$BRANCH" >> $GITHUB_OUTPUT
+          fi
 
       - name: Lowercase repo name
         id: repo_name
-        # Docker image names must be lowercase. This step converts 'User/Repo' to 'user/repo'.
         run: echo "value=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
 
       - name: Log in to GitHub Container Registry (GHCR)
@@ -39,12 +55,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push detector image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./detector
+          context: .
           push: true
           tags: |
-            ghcr.io/${{ steps.repo_name.outputs.value }}/detector:latest
-            ghcr.io/${{ steps.repo_name.outputs.value }}/detector:${{ github.event.workflow_run.head_branch }}
-            ghcr.io/${{ steps.repo_name.outputs.value }}/detector:${{ github.event.workflow_run.head_sha }}
+            ghcr.io/${{ steps.repo_name.outputs.value }}:latest
+            ghcr.io/${{ steps.repo_name.outputs.value }}:${{ steps.vars.outputs.tag }}
+            ghcr.io/${{ steps.repo_name.outputs.value }}:${{ github.sha }}
+
