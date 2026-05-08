@@ -269,13 +269,13 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: elastic-agent-standalone
-          image: docker.elastic.co/elastic-agent/elastic-agent:9.5.0
+          image: docker.elastic.co/elastic-agent/elastic-agent:8.17.0
           args: ["-c", "/etc/elastic-agent/agent.yml", "-e"]
           env:
             - name: API_KEY
               value: "WQx2_Z0BvD6mFqDyCYk9:_RsnYV29SHyimR6pc--Bfg"
             - name: ES_HOST
-              value: "https://elasticsearch-service.shift-festival.svc.cluster.local:9200"
+              value: "http://elasticsearch-service.shift-festival.svc.cluster.local:9200"
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
