@@ -23,8 +23,12 @@
         <xs:element name="body">
           <xs:complexType>
             <xs:sequence>
-              <xs:element name="error_code"         type="xs:string"/>
-              <xs:element name="error_description"  type="xs:string"/>
+              <xs:element name="error_code" type="xs:string"/>
+              <xs:choice>
+                <xs:element name="error_description" type="xs:string"/>
+                <xs:element name="message" type="xs:string"/>
+              </xs:choice>
+              <xs:element name="component" type="xs:string" minOccurs="0"/>
               <xs:element name="related_message_id" type="xs:string" minOccurs="0"/>
             </xs:sequence>
           </xs:complexType>
