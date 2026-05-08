@@ -1,7 +1,3 @@
-# Elastic Agent Standalone — geconfigureerd voor shift-festival namespace
-# Single-node K8s cluster, ELK in zelfde cluster, optimized voor 10GB storage limit
-# Authenticatie via API key
-
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -19,7 +15,14 @@ data:
           - >-
             ${ES_HOST}
         api_key: ${API_KEY}
-        ssl.verification_mode: none
+        # TLS naar Elasticsearch:
+        #  - Bij HTTP (huidige in-cluster dev/staging) wordt dit blok genegeerd.
+        #  - Bij HTTPS (prod / externe ES): mount de CA cert via Secret
+        #    'elastic-agent-es-certs' (key: ca.crt) op /etc/elastic-agent/es-certs/
+        #    en zorg dat ES_HOST in de elastic-agent-config ConfigMap https:// gebruikt.
+        ssl.verification_mode: full
+        ssl.certificate_authorities:
+          - /etc/elastic-agent/es-certs/ca.crt
     agent:
       monitoring:
         enabled: true
@@ -148,7 +151,9 @@ data:
             hosts:
               - 'https://${env.NODE_NAME}:10250'
             period: 60s
-            ssl.verification_mode: none
+            ssl.verification_mode: certificate
+            ssl.certificate_authorities:
+              - /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           - data_stream:
               dataset: kubernetes.node
               type: metrics
@@ -159,7 +164,9 @@ data:
             hosts:
               - 'https://${env.NODE_NAME}:10250'
             period: 60s
-            ssl.verification_mode: none
+            ssl.verification_mode: certificate
+            ssl.certificate_authorities:
+              - /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           - data_stream:
               dataset: kubernetes.pod
               type: metrics
@@ -170,7 +177,9 @@ data:
             hosts:
               - 'https://${env.NODE_NAME}:10250'
             period: 60s
-            ssl.verification_mode: none
+            ssl.verification_mode: certificate
+            ssl.certificate_authorities:
+              - /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           - data_stream:
               dataset: kubernetes.system
               type: metrics
@@ -181,7 +190,9 @@ data:
             hosts:
               - 'https://${env.NODE_NAME}:10250'
             period: 60s
-            ssl.verification_mode: none
+            ssl.verification_mode: certificate
+            ssl.certificate_authorities:
+              - /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
       # ============================================
       # System metrics (host-level)
       # ============================================
@@ -243,6 +254,16 @@ data:
               - uptime
             period: 60s
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elastic-agent-config
+  namespace: shift-festival
+  labels:
+    app.kubernetes.io/name: elastic-agent-standalone
+data:
+  ES_HOST: "http://elasticsearch-service.shift-festival.svc.cluster.local:9200"
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -273,9 +294,15 @@ spec:
           args: ["-c", "/etc/elastic-agent/agent.yml", "-e"]
           env:
             - name: API_KEY
-              value: "WQx2_Z0BvD6mFqDyCYk9:_RsnYV29SHyimR6pc--Bfg"
+              valueFrom:  
+                secretKeyRef:  
+                  name: elastic-agent-secrets  
+                  key: api-key
             - name: ES_HOST
-              value: "http://elasticsearch-service.shift-festival.svc.cluster.local:9200"
+              valueFrom:
+                configMapKeyRef:
+                  name: elastic-agent-config
+                  key: ES_HOST
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
@@ -313,11 +340,22 @@ spec:
               readOnly: true
             - name: elastic-agent-state
               mountPath: /usr/share/elastic-agent/state
+            - name: es-certs
+              mountPath: /etc/elastic-agent/es-certs
+              readOnly: true
       volumes:
         - name: datastreams
           configMap:
             defaultMode: 0644
             name: agent-node-datastreams
+        # CA cert voor TLS naar Elasticsearch.
+        # optional: true ⇒ pod start ook als de Secret (nog) niet bestaat
+        # (HTTP-modus). Bij HTTPS moet 'elastic-agent-es-certs' bestaan met key 'ca.crt'.
+        - name: es-certs
+          secret:
+            secretName: elastic-agent-es-certs
+            optional: true
+            defaultMode: 0444
         - name: proc
           hostPath:
             path: /proc
@@ -380,10 +418,6 @@ rules:
       - serviceaccounts
       - persistentvolumes
       - persistentvolumeclaims
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["extensions"]
-    resources:
-      - replicasets
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources:
