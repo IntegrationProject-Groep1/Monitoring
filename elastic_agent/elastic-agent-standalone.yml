@@ -30,7 +30,6 @@ data:
         logs: true
         metrics: true
     providers.kubernetes:
-    providers.kubernetes:
       node: ${env.NODE_NAME}
       scope: node
     providers.kubernetes_leaderelection:
@@ -320,6 +319,7 @@ spec:
             runAsUser: 0
           resources:
             limits:
+              cpu: 500m
               memory: 700Mi
             requests:
               cpu: 200m
