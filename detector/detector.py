@@ -48,32 +48,28 @@ def _get_rabbit_channel():
     return _rabbit_channel
 
 def send_alert_xml(system_name):
-    """Bouwt en verstuurt de Alert XML naar de mailing queue conform v2.3 contract."""
+    """Bouwt en verstuurt de Alert XML naar de mailing queue conform v2.3 contract sectie 4.
+
+    Gebruikt flat <alert> root (geoorloofde uitzondering op Regel 1 voor intern
+    Monitoring↔Mailing verkeer), queue 'to_mailing', default exchange.
+    """
     connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
     channel = connection.channel()
-    channel.queue_declare(queue="monitoring.alerts", durable=True)
+    channel.queue_declare(queue="to_mailing", durable=True)
 
-    msg_id = str(uuid.uuid4())
-    timestamp = datetime.now().isoformat() + "Z"
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    xml_payload = f"""<message>
-  <header>
-    <message_id>{msg_id}</message_id>
-    <timestamp>{timestamp}</timestamp>
-    <source>monitoring</source>
-    <type>system_alert</type>
-    <version>2.0</version>
-  </header>
-  <body>
-    <system>{system_name}</system>
-    <status>down</status>
-    <message>Systeem {system_name} heeft al meer dan {THRESHOLD_SECONDS}s geen heartbeat gestuurd.</message>
-  </body>
-</message>"""
+    xml_payload = f"""<?xml version="1.0" encoding="UTF-8"?>
+<alert>
+  <type>HEARTBEAT_CRITICAL</type>
+  <system>{system_name}</system>
+  <message>Systeem {system_name} heeft al meer dan {THRESHOLD_SECONDS}s geen heartbeat gestuurd.</message>
+  <timestamp>{timestamp}</timestamp>
+</alert>"""
 
-    channel.basic_publish(exchange='', routing_key='monitoring.alerts', body=xml_payload)
+    channel.basic_publish(exchange='', routing_key='to_mailing', body=xml_payload)
     connection.close()
-    print(f"Standard Alert verzonden voor {system_name} (msg_id: {msg_id})")
+    print(f"Alert verzonden voor {system_name}")
 
 while True:
     try:
