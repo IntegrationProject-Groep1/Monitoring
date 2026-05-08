@@ -13,8 +13,8 @@ data:
         type: elasticsearch
         hosts:
           - >-
-            ${ES_HOST}
-        api_key: ${API_KEY}
+            ${env.ES_HOST}
+        api_key: ${env.API_KEY}
         # TLS naar Elasticsearch:
         #  - Bij HTTP (huidige in-cluster dev/staging) wordt dit blok genegeerd.
         #  - Bij HTTPS (prod / externe ES): mount de CA cert via Secret
@@ -30,8 +30,11 @@ data:
         logs: true
         metrics: true
     providers.kubernetes:
-      node: ${NODE_NAME}
+    providers.kubernetes:
+      node: ${env.NODE_NAME}
       scope: node
+    providers.kubernetes_leaderelection:
+      enabled: true
     inputs:
       # ============================================
       # Cluster-wide metrics (alleen leader pod stuurt)
@@ -319,7 +322,7 @@ spec:
             limits:
               memory: 700Mi
             requests:
-              cpu: 100m
+              cpu: 200m
               memory: 400Mi
           volumeMounts:
             - name: datastreams
