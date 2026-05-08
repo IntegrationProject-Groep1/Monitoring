@@ -1,0 +1,443 @@
+# Elastic Agent Standalone — geconfigureerd voor shift-festival namespace
+# Single-node K8s cluster, ELK in zelfde cluster, optimized voor 10GB storage limit
+# Authenticatie via API key
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-node-datastreams
+  namespace: shift-festival
+  labels:
+    app.kubernetes.io/name: elastic-agent-standalone
+data:
+  agent.yml: |-
+    outputs:
+      default:
+        type: elasticsearch
+        hosts:
+          - >-
+            ${ES_HOST}
+        api_key: ${API_KEY}
+        ssl.verification_mode: none
+    agent:
+      monitoring:
+        enabled: true
+        use_output: default
+        logs: true
+        metrics: true
+    providers.kubernetes:
+      node: ${NODE_NAME}
+      scope: node
+    inputs:
+      # ============================================
+      # Cluster-wide metrics (alleen leader pod stuurt)
+      # ============================================
+      - id: kubernetes-cluster-metrics
+        condition: ${kubernetes_leaderelection.leader} == true
+        type: kubernetes/metrics
+        use_output: default
+        meta:
+          package:
+            name: kubernetes
+            version: 1.52.0
+        data_stream:
+          namespace: default
+        streams:
+          - data_stream:
+              dataset: kubernetes.state_container
+              type: metrics
+            metricsets:
+              - state_container
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_daemonset
+              type: metrics
+            metricsets:
+              - state_daemonset
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_deployment
+              type: metrics
+            metricsets:
+              - state_deployment
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_namespace
+              type: metrics
+            metricsets:
+              - state_namespace
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_node
+              type: metrics
+            metricsets:
+              - state_node
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_pod
+              type: metrics
+            metricsets:
+              - state_pod
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_replicaset
+              type: metrics
+            metricsets:
+              - state_replicaset
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_service
+              type: metrics
+            metricsets:
+              - state_service
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+          - data_stream:
+              dataset: kubernetes.state_statefulset
+              type: metrics
+            metricsets:
+              - state_statefulset
+            add_metadata: true
+            hosts:
+              - 'kube-state-metrics.kube-system:8080'
+            period: 60s
+      # ============================================
+      # Per-node metrics (kubelet)
+      # ============================================
+      - id: kubernetes-node-metrics
+        type: kubernetes/metrics
+        use_output: default
+        meta:
+          package:
+            name: kubernetes
+            version: 1.52.0
+        data_stream:
+          namespace: default
+        streams:
+          - data_stream:
+              dataset: kubernetes.container
+              type: metrics
+            metricsets:
+              - container
+            add_metadata: true
+            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+            hosts:
+              - 'https://${env.NODE_NAME}:10250'
+            period: 60s
+            ssl.verification_mode: none
+          - data_stream:
+              dataset: kubernetes.node
+              type: metrics
+            metricsets:
+              - node
+            add_metadata: true
+            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+            hosts:
+              - 'https://${env.NODE_NAME}:10250'
+            period: 60s
+            ssl.verification_mode: none
+          - data_stream:
+              dataset: kubernetes.pod
+              type: metrics
+            metricsets:
+              - pod
+            add_metadata: true
+            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+            hosts:
+              - 'https://${env.NODE_NAME}:10250'
+            period: 60s
+            ssl.verification_mode: none
+          - data_stream:
+              dataset: kubernetes.system
+              type: metrics
+            metricsets:
+              - system
+            add_metadata: true
+            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+            hosts:
+              - 'https://${env.NODE_NAME}:10250'
+            period: 60s
+            ssl.verification_mode: none
+      # ============================================
+      # System metrics (host-level)
+      # ============================================
+      - id: system-metrics
+        type: system/metrics
+        use_output: default
+        meta:
+          package:
+            name: system
+            version: 1.20.4
+        data_stream:
+          namespace: default
+        streams:
+          - data_stream:
+              dataset: system.cpu
+              type: metrics
+            period: 60s
+            cpu.metrics:
+              - percentages
+              - normalized_percentages
+            metricsets:
+              - cpu
+            system.hostfs: '/hostfs'
+          - data_stream:
+              dataset: system.memory
+              type: metrics
+            period: 60s
+            metricsets:
+              - memory
+            system.hostfs: '/hostfs'
+          - data_stream:
+              dataset: system.network
+              type: metrics
+            period: 60s
+            network.interfaces: null
+            metricsets:
+              - network
+          - data_stream:
+              dataset: system.filesystem
+              type: metrics
+            period: 5m
+            metricsets:
+              - filesystem
+            system.hostfs: '/hostfs'
+            processors:
+              - drop_event.when.regexp:
+                  system.filesystem.mount_point: ^/(sys|cgroup|proc|dev|etc|host|lib|snap)($|/)
+          - data_stream:
+              dataset: system.load
+              type: metrics
+            condition: '${host.platform} != ''windows'''
+            period: 60s
+            metricsets:
+              - load
+          - data_stream:
+              type: metrics
+              dataset: system.uptime
+            metricsets:
+              - uptime
+            period: 60s
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: elastic-agent-standalone
+  namespace: shift-festival
+  labels:
+    app.kubernetes.io/name: elastic-agent-standalone
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elastic-agent-standalone
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elastic-agent-standalone
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+      serviceAccountName: elastic-agent-standalone
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: elastic-agent-standalone
+          image: docker.elastic.co/elastic-agent/elastic-agent:9.5.0
+          args: ["-c", "/etc/elastic-agent/agent.yml", "-e"]
+          env:
+            - name: API_KEY
+              value: "WQx2_Z0BvD6mFqDyCYk9:_RsnYV29SHyimR6pc--Bfg"
+            - name: ES_HOST
+              value: "https://elasticsearch-service.shift-festival.svc.cluster.local:9200"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ELASTIC_NETINFO
+              value: "false"
+          securityContext:
+            runAsUser: 0
+          resources:
+            limits:
+              memory: 700Mi
+            requests:
+              cpu: 100m
+              memory: 400Mi
+          volumeMounts:
+            - name: datastreams
+              mountPath: /etc/elastic-agent/agent.yml
+              readOnly: true
+              subPath: agent.yml
+            - name: proc
+              mountPath: /hostfs/proc
+              readOnly: true
+            - name: cgroup
+              mountPath: /hostfs/sys/fs/cgroup
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: elastic-agent-state
+              mountPath: /usr/share/elastic-agent/state
+      volumes:
+        - name: datastreams
+          configMap:
+            defaultMode: 0644
+            name: agent-node-datastreams
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: elastic-agent-state
+          hostPath:
+            path: /var/lib/elastic-agent-standalone/shift-festival/state
+            type: DirectoryOrCreate
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: elastic-agent-standalone
+subjects:
+  - kind: ServiceAccount
+    name: elastic-agent-standalone
+    namespace: shift-festival
+roleRef:
+  kind: ClusterRole
+  name: elastic-agent-standalone
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: shift-festival
+  name: elastic-agent-standalone
+subjects:
+  - kind: ServiceAccount
+    name: elastic-agent-standalone
+    namespace: shift-festival
+roleRef:
+  kind: Role
+  name: elastic-agent-standalone
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: elastic-agent-standalone
+  labels:
+    app.kubernetes.io/name: elastic-agent-standalone
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - namespaces
+      - events
+      - pods
+      - services
+      - configmaps
+      - serviceaccounts
+      - persistentvolumes
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions"]
+    resources:
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - statefulsets
+      - deployments
+      - replicasets
+      - daemonsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/stats
+    verbs:
+      - get
+  - nonResourceURLs:
+      - "/metrics"
+    verbs:
+      - get
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - clusterrolebindings
+      - clusterroles
+      - rolebindings
+      - roles
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: elastic-agent-standalone
+  namespace: shift-festival
+  labels:
+    app.kubernetes.io/name: elastic-agent-standalone
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs: ["get", "create", "update"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elastic-agent-standalone
+  namespace: shift-festival
+  labels:
+    app.kubernetes.io/name: elastic-agent-standalone
+---
