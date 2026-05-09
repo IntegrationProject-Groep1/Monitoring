@@ -55,7 +55,7 @@ def main() -> None:
     print("Running detector --run-report to generate a daily report...")
     result = subprocess.run(
         ["python3", "-u", "detector/detector.py", "--run-report"],
-        cwd="/home/sabu0/Monitoring",
+        cwd=os.path.dirname(os.path.abspath(__file__)) + "/..",
         capture_output=True,
         text=True,
         timeout=30,

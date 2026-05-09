@@ -124,7 +124,7 @@ def parse_recipients(raw: str) -> list[dict[str, str]]:
 
 
 def send_alert_xml(system_name: str) -> None:
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     xml_payload = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <alert>
   <type>HEARTBEAT_CRITICAL</type>
@@ -137,7 +137,7 @@ def send_alert_xml(system_name: str) -> None:
 
 
 def send_log_xml(level: str, action: str, message: str, source: str = "monitoring") -> None:
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     xml_payload = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <message>
   <header>
@@ -163,7 +163,7 @@ def build_send_mailing_xml(
     template_data: dict,
     attachment: dict | None = None,
 ) -> str:
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     correlation_id = f"report-{report_date}"
     campaign_id = f"{REPORT_CAMPAIGN_PREFIX}-{report_date}"
     recipients = parse_recipients(REPORT_RECIPIENTS)
@@ -339,9 +339,11 @@ def extract_revenue(message: str) -> float:
 
 
 def compute_health_score(availability: float, error_density: float) -> float:
-    availability_component = max(0.0, min(10.0, 5.0 + (availability - 95.0) * 0.2))
-    error_component = max(0.0, min(10.0, 10.0 - max(0.0, error_density - 1.0) * 0.1818))
-    return round(min(10.0, availability_component * 0.7 + error_component * 0.3), 1)
+    # Scale: 0-100% availability maps to 0-10 availability_component
+    # 0 errors maps to 10, increasing errors reduce the score
+    availability_component = (availability / 100.0) * 10.0
+    error_component = max(0.0, 10.0 - (error_density / 10.0))
+    return round((availability_component * 0.7 + error_component * 0.3), 1)
 
 
 def render_report_pdf(context: dict) -> bytes:
@@ -354,7 +356,7 @@ def archive_report_metadata(report_date: str, overall_health: float, systems_dow
     index_name = f"reports-{datetime.strptime(report_date, '%Y-%m-%d').strftime('%Y.%m.%d')}"
     document = {
         "report_date": report_date,
-        "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "overall_health": overall_health,
         "systems_down": systems_down,
         "storage_path": pdf_path,
@@ -371,10 +373,6 @@ def build_report_context(start: datetime, end: datetime) -> dict:
     log_agg = aggregate_logs(start, end)
 
     systems: list[dict] = []
-    system_names = set(heartbeat_counts) | {
-        bucket["key"]
-        for bucket in log_agg.get("aggregations", {}).get("systems", {}).get("buckets", [])
-    }
 
     overall_errors = log_agg.get("aggregations", {}).get("overall_errors", {}).get("top_errors", {}).get("buckets", [])
     overall_top_alert = "No critical errors detected"
@@ -399,7 +397,8 @@ def build_report_context(start: datetime, end: datetime) -> dict:
             if level == "info":
                 for action_bucket in level_bucket.get("actions", {}).get("buckets", []):
                     if action_bucket["key"] == "payment":
-                        # attempt to infer revenue from message text in payment logs if present
+                        # revenue extraction from log messages not implemented
+                        # would require log message retrieval in aggregate_logs query
                         pass
         top_errors = [
             {"message": error_bucket["key"], "count": error_bucket["doc_count"]}
@@ -570,7 +569,7 @@ def main() -> None:
                     next_report_date = now.date()
 
         except Exception:
-            logger.exception("Fout in detector")
+            logger.exception("Error in detector")
 
         if _rabbit_conn is not None and _rabbit_conn.is_open:
             try:

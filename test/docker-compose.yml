@@ -43,6 +43,12 @@ services:
       - ../monitoring_elk/logstash/pipeline:/usr/share/logstash/pipeline
     networks:
       - elk-net
+    healthcheck:
+      test: curl -s http://localhost:9600 >/dev/null || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       elasticsearch:
         condition: service_healthy
