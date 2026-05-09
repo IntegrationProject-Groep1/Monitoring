@@ -53,8 +53,23 @@ def main() -> None:
     # Test report generation
     channel.queue_declare(queue=REPORT_QUEUE, durable=True)
     print("Running detector --run-report to generate a daily report...")
+    report_container = os.getenv("DETECTOR_RUN_REPORT_CONTAINER")
+    if report_container:
+        cmd = [
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            report_container,
+            "python3",
+            "detector.py",
+            "--run-report",
+        ]
+    else:
+        cmd = ["python3", "-u", "detector/detector.py", "--run-report"]
+
     result = subprocess.run(
-        ["python3", "-u", "detector/detector.py", "--run-report"],
+        cmd,
         cwd=os.path.dirname(os.path.abspath(__file__)) + "/..",
         capture_output=True,
         text=True,

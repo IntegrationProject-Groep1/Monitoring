@@ -4,9 +4,11 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+import xml.etree.ElementTree as ET
 
 import pika
 from elasticsearch import Elasticsearch, NotFoundError
@@ -45,8 +47,9 @@ logger = logging.getLogger("detector")
 es = Elasticsearch([ES_HOST], basic_auth=(ES_USER, ES_PASS) if ES_PASS else None)
 cooldown_list: dict[str, datetime] = {}
 
-_rabbit_conn = None
-_rabbit_channel = None
+_thread_local = threading.local()
+_report_thread: threading.Thread | None = None
+_report_lock = threading.Lock()
 
 TEMPLATE_ENV = Environment(
     loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), "templates")),
@@ -76,15 +79,16 @@ KNOWN_SYSTEMS = {
 
 
 def _get_rabbit_channel():
-    global _rabbit_conn, _rabbit_channel
+    rabbit_conn = getattr(_thread_local, "rabbit_conn", None)
+    rabbit_channel = getattr(_thread_local, "rabbit_channel", None)
     if (
-        _rabbit_conn is None
-        or _rabbit_conn.is_closed
-        or _rabbit_channel is None
-        or _rabbit_channel.is_closed
+        rabbit_conn is None
+        or rabbit_conn.is_closed
+        or rabbit_channel is None
+        or rabbit_channel.is_closed
     ):
         credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
-        _rabbit_conn = pika.BlockingConnection(pika.ConnectionParameters(
+        rabbit_conn = pika.BlockingConnection(pika.ConnectionParameters(
             host=RABBITMQ_HOST,
             port=RABBITMQ_PORT,
             virtual_host=RABBITMQ_VHOST,
@@ -92,9 +96,11 @@ def _get_rabbit_channel():
             heartbeat=60,
             blocked_connection_timeout=30,
         ))
-        _rabbit_channel = _rabbit_conn.channel()
-        logger.info("RabbitMQ connection established")
-    return _rabbit_channel
+        rabbit_channel = rabbit_conn.channel()
+        _thread_local.rabbit_conn = rabbit_conn
+        _thread_local.rabbit_channel = rabbit_channel
+        logger.info("RabbitMQ connection established for %s", threading.current_thread().name)
+    return rabbit_channel
 
 
 def publish(queue: str, body: str) -> None:
@@ -183,47 +189,39 @@ def build_send_mailing_xml(
     recipients = parse_recipients(REPORT_RECIPIENTS)
     data_payload = json.dumps(template_data, separators=(",", ":"), ensure_ascii=False)
 
-    recipient_entries = "".join(
-        f"      <recipient>\n"
-        f"        <email>{xml_escape(recipient['email'])}</email>\n"
-        f"        <user_id>{xml_escape(recipient['user_id'])}</user_id>\n"
-        f"        <contact>\n"
-        f"          <first_name>{xml_escape(recipient['first_name'])}</first_name>\n"
-        f"          <last_name>{xml_escape(recipient['last_name'])}</last_name>\n"
-        f"        </contact>\n"
-        f"      </recipient>\n"
-        for recipient in recipients
-    )
+    message_el = ET.Element("message")
+    header_el = ET.SubElement(message_el, "header")
+    ET.SubElement(header_el, "message_id").text = str(uuid.uuid4())
+    ET.SubElement(header_el, "timestamp").text = timestamp
+    ET.SubElement(header_el, "source").text = REPORT_SOURCE
+    ET.SubElement(header_el, "type").text = "send_mailing"
+    ET.SubElement(header_el, "version").text = "2.0"
+    ET.SubElement(header_el, "correlation_id").text = correlation_id
 
-    attachment_xml = ""
+    body_el = ET.SubElement(message_el, "body")
+    ET.SubElement(body_el, "campaign_id").text = campaign_id
+    ET.SubElement(body_el, "subject").text = subject
+    ET.SubElement(body_el, "template_id").text = REPORT_TEMPLATE_ID
+    ET.SubElement(body_el, "mail_type").text = REPORT_MAIL_TYPE
+
+    recipients_el = ET.SubElement(body_el, "recipients")
+    for recipient in recipients:
+        recipient_el = ET.SubElement(recipients_el, "recipient")
+        ET.SubElement(recipient_el, "email").text = recipient["email"]
+        ET.SubElement(recipient_el, "user_id").text = recipient["user_id"]
+        contact_el = ET.SubElement(recipient_el, "contact")
+        ET.SubElement(contact_el, "first_name").text = recipient["first_name"]
+        ET.SubElement(contact_el, "last_name").text = recipient["last_name"]
+
+    ET.SubElement(body_el, "template_data").text = data_payload
+
     if attachment is not None:
-        attachment_xml = f"""
-    <attachment>
-      <filename>{xml_escape(attachment['filename'])}</filename>
-      <content_type>{xml_escape(attachment['content_type'])}</content_type>
-      <base64_data>{xml_escape(attachment['base64_data'])}</base64_data>
-    </attachment>"""
+        attachment_el = ET.SubElement(body_el, "attachment")
+        ET.SubElement(attachment_el, "filename").text = attachment["filename"]
+        ET.SubElement(attachment_el, "content_type").text = attachment["content_type"]
+        ET.SubElement(attachment_el, "base64_data").text = attachment["base64_data"]
 
-    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<message>
-  <header>
-    <message_id>{uuid.uuid4()}</message_id>
-    <timestamp>{timestamp}</timestamp>
-    <source>{xml_escape(REPORT_SOURCE)}</source>
-    <type>send_mailing</type>
-    <version>2.0</version>
-    <correlation_id>{xml_escape(correlation_id)}</correlation_id>
-  </header>
-  <body>
-    <campaign_id>{xml_escape(campaign_id)}</campaign_id>
-    <subject>{xml_escape(subject)}</subject>
-    <template_id>{xml_escape(REPORT_TEMPLATE_ID)}</template_id>
-    <mail_type>{xml_escape(REPORT_MAIL_TYPE)}</mail_type>
-    <recipients>
-{recipient_entries}    </recipients>
-    <template_data>{xml_escape(data_payload)}</template_data>{attachment_xml}
-  </body>
-</message>"""
+    return ET.tostring(message_el, encoding="unicode", xml_declaration=True)
 
 
 def send_report_message(report_date: str, attachment: dict | None, template_data: dict) -> None:
@@ -233,9 +231,9 @@ def send_report_message(report_date: str, attachment: dict | None, template_data
     logger.info("Daily report message published to %s", REPORT_QUEUE)
 
 
-def query_aggregations(index: str, body: dict) -> dict:
+def query_aggregations(index: str, search_params: dict) -> dict:
     try:
-        return es.search(index=index, body=body, allow_no_indices=True)
+        return es.search(index=index, allow_no_indices=True, **search_params)
     except NotFoundError:
         return {}
 
@@ -340,6 +338,42 @@ def query_trailing_average(start: datetime, system: str) -> float:
         return 0.0
     return sum(bucket["doc_count"] for bucket in buckets) / len(buckets)
 
+REVENUE_PATTERN = re.compile(r"€\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|eur)\b")
+
+def parse_revenue_amount(message: str) -> float:
+    match = REVENUE_PATTERN.search(message)
+    if not match:
+        return 0.0
+    amount = match.group(1) or match.group(2)
+    if not amount:
+        return 0.0
+    return float(amount.replace(",", "."))
+
+def extract_payment_revenue(start: datetime, end: datetime) -> float:
+    search_params = {
+        "size": 1000,
+        "query": {
+            "bool": {
+                "filter": [
+                    {"range": {"@timestamp": {"gte": start.isoformat(), "lt": end.isoformat()}}},
+                    {"term": {"action.keyword": "payment"}},
+                ]
+            }
+        },
+        "_source": ["log_message"],
+    }
+    try:
+        result = es.search(index="logs-*", allow_no_indices=True, **search_params)
+    except NotFoundError:
+        return 0.0
+
+    revenue = 0.0
+    for hit in result.get("hits", {}).get("hits", []):
+        message = hit.get("_source", {}).get("log_message", "")
+        revenue += parse_revenue_amount(message)
+    return round(revenue, 2)
+
+
 
 
 
@@ -390,7 +424,7 @@ def build_report_context(start: datetime, end: datetime) -> dict:
         overall_top_alert = f"{top['key']} ({top['doc_count']})"
 
     business_summary = {key: 0 for key in BUSINESS_ACTIONS}
-    payment_revenue = 0.0
+    payment_revenue = extract_payment_revenue(start, end)
     for action_bucket in log_agg.get("aggregations", {}).get("info_actions", {}).get("actions", {}).get("buckets", []):
         action = action_bucket["key"]
         count = action_bucket["doc_count"]
@@ -406,9 +440,7 @@ def build_report_context(start: datetime, end: datetime) -> dict:
             if level == "info":
                 for action_bucket in level_bucket.get("actions", {}).get("buckets", []):
                     if action_bucket["key"] == "payment":
-                        # revenue extraction from log messages not implemented
-                        # would require log message retrieval in aggregate_logs query
-                        pass
+                        business_summary["payment"] = action_bucket["doc_count"]
         top_errors = [
             {"message": error_bucket["key"], "count": error_bucket["doc_count"]}
             for error_bucket in bucket.get("errors", {}).get("top_errors", {}).get("buckets", [])
@@ -535,6 +567,17 @@ def generate_daily_report(now: datetime | None = None) -> None:
 
 def should_run_daily_report(now: datetime) -> bool:
     return now.hour == REPORT_TIME_HOUR and now.minute == REPORT_TIME_MINUTE
+
+
+def start_report_generation(now: datetime) -> None:
+    global _report_thread
+    with _report_lock:
+        if _report_thread is not None and _report_thread.is_alive():
+            logger.warning("Daily report generation already in progress; skipping this run")
+            return
+        _report_thread = threading.Thread(target=generate_daily_report, args=(now,), daemon=True)
+        _report_thread.start()
+        logger.info("Started background report thread for %s", now.date())
 
 
 def main() -> None:
