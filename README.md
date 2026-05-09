@@ -42,14 +42,17 @@ Monitoring sends heartbeats but does not log to itself. Identity service is exem
 | `heartbeats-quarantine-YYYY.MM.dd` | Invalid XML, unknown source, bad timestamp, unsupported contract version |
 | `logs-YYYY.MM.dd` | Valid, processed platform logs |
 | `logs-quarantine-YYYY.MM.dd` | Invalid XML, unknown source, bad timestamp, wrong message type, unknown level, unsupported contract version |
+| `reports-YYYY.MM.dd` | Daily report metadata (no PDF body) |
 
 ## Message contracts
 
-Both heartbeats and platform logs use the same `<message><header><body>` envelope. Header carries `message_id`, `timestamp` (UTC ISO 8601), `source`, `type` (`heartbeat` or `log`), and `version`.
+Both heartbeats and platform logs use the same `<message><header><body>` envelope. Header carries `message_id`, `timestamp` (UTC ISO 8601), `source`, `type` (`heartbeat`, `log`, or `send_mailing`), and `version`.
 
 **Heartbeat body**: `status` (`online`/`offline`) and `uptime` (seconds, integer, required).
 
 **Platform log body**: `level` (`info`/`warning`/`error`), `action` (a category from a closed set — see `logstash.conf`), and `message` (free text describing what happened). Log only at flow boundaries — successful completions, suspicious-but-non-critical events, or failures. Don't log every intermediate step.
+
+**Daily report body**: `send_mailing` messages are published to `monitoring.reports` with `<source>monitoring</source>` and `<mail_type>daily_report</mail_type>`. A short JSON preview is carried in `<template_data>`, and the generated PDF is attached via `<attachment>`.
 
 ## Authentication
 

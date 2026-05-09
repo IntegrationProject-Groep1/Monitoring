@@ -1,2 +1,4 @@
 elasticsearch>=8,<9
 pika
+Jinja2>=3.0
+WeasyPrint>=57.0
