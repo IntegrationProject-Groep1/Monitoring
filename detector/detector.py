@@ -64,7 +64,15 @@ BUSINESS_ACTIONS = {
     "email": "Mailings sent",
 }
 
-PAYMENT_CURRENCY_PATTERN = re.compile(r"€\s?([0-9]+(?:[.,][0-9]{2})?)")
+KNOWN_SYSTEMS = {
+    "planning",
+    "crm",
+    "kassa",
+    "facturatie",
+    "monitoring",
+    "frontend",
+    "mailing",
+}
 
 
 def _get_rabbit_channel():
@@ -101,7 +109,13 @@ def publish(queue: str, body: str) -> None:
 
 
 def xml_escape(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
 
 
 def parse_recipients(raw: str) -> list[dict[str, str]]:
@@ -236,7 +250,7 @@ def aggregate_heartbeats(start: datetime, end: datetime) -> dict[str, int]:
         },
         "aggs": {
             "systems": {
-                "terms": {"field": "system.keyword", "size": 50},
+                "terms": {"field": "system.keyword", "size": 500},
                 "aggs": {
                     "timeline": {
                         "date_histogram": {
@@ -267,12 +281,12 @@ def aggregate_logs(start: datetime, end: datetime) -> dict:
         },
         "aggs": {
             "systems": {
-                "terms": {"field": "system.keyword", "size": 50, "order": {"_count": "desc"}},
+                "terms": {"field": "system.keyword", "size": 500, "order": {"_count": "desc"}},
                 "aggs": {
                     "levels": {
                         "terms": {"field": "level.keyword", "size": 10},
                         "aggs": {
-                            "actions": {"terms": {"field": "action.keyword", "size": 50}}
+                            "actions": {"terms": {"field": "action.keyword", "size": 500}}
                         },
                     },
                     "errors": {
@@ -327,15 +341,6 @@ def query_trailing_average(start: datetime, system: str) -> float:
     return sum(bucket["doc_count"] for bucket in buckets) / len(buckets)
 
 
-def extract_revenue(message: str) -> float:
-    match = PAYMENT_CURRENCY_PATTERN.search(message)
-    if not match:
-        return 0.0
-    amount = match.group(1).replace(".", "").replace(",", ".") if "," in match.group(1) else match.group(1)
-    try:
-        return float(amount)
-    except ValueError:
-        return 0.0
 
 
 def compute_health_score(availability: float, error_density: float) -> float:
@@ -373,6 +378,10 @@ def build_report_context(start: datetime, end: datetime) -> dict:
     log_agg = aggregate_logs(start, end)
 
     systems: list[dict] = []
+    known_systems = KNOWN_SYSTEMS | set(heartbeat_counts) | {
+        bucket["key"]
+        for bucket in log_agg.get("aggregations", {}).get("systems", {}).get("buckets", [])
+    }
 
     overall_errors = log_agg.get("aggregations", {}).get("overall_errors", {}).get("top_errors", {}).get("buckets", [])
     overall_top_alert = "No critical errors detected"
@@ -438,6 +447,21 @@ def build_report_context(start: datetime, end: datetime) -> dict:
                     "activity_trend": "0%",
                     "total_events": 0,
                     "heartbeats": total,
+                }
+            )
+
+    for system in sorted(known_systems):
+        if system not in {s["name"] for s in systems}:
+            systems.append(
+                {
+                    "name": system,
+                    "availability": 0.0,
+                    "error_density": 0.0,
+                    "health_score": 0.0,
+                    "top_issues": [],
+                    "activity_trend": "0%",
+                    "total_events": 0,
+                    "heartbeats": 0,
                 }
             )
 
@@ -530,16 +554,10 @@ def main() -> None:
             # Query: Zoek de laatste heartbeat per systeem
             heartbeat_query = {
                 "size": 0,
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {"range": {"@timestamp": {"gte": "now-1h/h", "lt": "now"}}}
-                        ]
-                    }
-                },
+                "query": {"match_all": {}},
                 "aggs": {
                     "systems": {
-                        "terms": {"field": "system.keyword", "size": 50},
+                        "terms": {"field": "system.keyword", "size": 500},
                         "aggs": {"last_heartbeat": {"max": {"field": "@timestamp"}}},
                     }
                 },
