@@ -84,8 +84,11 @@ jobs:
       - name: Install test dependencies
         run: pip install -r test/requirements.txt
 
+      - name: Show compose service status
+        run: docker compose --env-file monitoring_elk/.env -f docker-compose.yml -f test/docker-compose.yml ps
+
       - name: Send test heartbeats and platform logs
-        run: python test/producer.py
+        run: python3 test/producer.py
         env:
           RABBITMQ_HOST: localhost
           RABBITMQ_PORT: 5672
@@ -100,12 +103,13 @@ jobs:
           ES_ADMIN_PASS: elk123
 
       - name: Verify detector emits alert
-        run: python test/verify_detector.py
+        run: python3 test/verify_detector.py
         env:
           RABBITMQ_HOST: localhost
           RABBITMQ_PORT: 5672
           RABBITMQMONITORING_USER: monitoring_test
           RABBITMQMONITORING_PASS: monitoring_test_pass
+          DETECTOR_RUN_REPORT_CONTAINER: detector-service
 
       - name: Dump logs on failure
         if: failure()
