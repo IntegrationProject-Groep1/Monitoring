@@ -626,7 +626,7 @@ def main() -> None:
 
             if should_run_daily_report(now):
                 if next_report_date != now.date():
-                    generate_daily_report(now)
+                    start_report_generation(now)
                     next_report_date = now.date()
 
         except Exception:
