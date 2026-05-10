@@ -351,7 +351,7 @@ def parse_revenue_amount(message: str) -> float:
 
 def extract_payment_revenue(start: datetime, end: datetime) -> float:
     search_params = {
-        "size": 1000,
+        "size": 10000,
         "query": {
             "bool": {
                 "filter": [
