@@ -581,7 +581,6 @@ def start_report_generation(now: datetime) -> None:
 
 
 def main() -> None:
-    global _rabbit_conn, _rabbit_channel
     parser = argparse.ArgumentParser(description="Monitoring detector with daily report generation")
     parser.add_argument("--run-report", action="store_true", help="Generate the daily report once and exit")
     args = parser.parse_args()
@@ -632,17 +631,18 @@ def main() -> None:
         except Exception:
             logger.exception("Error in detector")
 
-        if _rabbit_conn is not None and _rabbit_conn.is_open:
+        rabbit_conn = getattr(_thread_local, "rabbit_conn", None)
+        if rabbit_conn is not None and rabbit_conn.is_open:
             try:
-                _rabbit_conn.process_data_events(time_limit=0)
+                rabbit_conn.process_data_events(time_limit=0)
             except pika.exceptions.AMQPError as exc:
                 logger.warning("RabbitMQ maintenance failed: %s", exc)
                 try:
-                    _rabbit_conn.close()
+                    rabbit_conn.close()
                 except Exception:
                     pass
-                _rabbit_conn = None
-                _rabbit_channel = None
+                _thread_local.rabbit_conn = None
+                _thread_local.rabbit_channel = None
 
         time.sleep(1)
 
