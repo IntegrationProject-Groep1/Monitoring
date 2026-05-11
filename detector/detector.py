@@ -41,6 +41,34 @@ REPORT_MAIL_TYPE = os.getenv("REPORT_MAIL_TYPE", "daily_report")
 REPORT_TIME_HOUR = int(os.getenv("REPORT_TIME_HOUR", "6"))
 REPORT_TIME_MINUTE = int(os.getenv("REPORT_TIME_MINUTE", "0"))
 
+TEMPLATE_ENV = Environment(
+    loader=FileSystemLoader(os.path.join(os.path.dirname(__file__), "templates")),
+    autoescape=select_autoescape(["html"]),
+)
+
+EXPECTED_HEARTBEATS_PER_DAY = 86400
+EXPECTED_HEARTBEATS_PER_MINUTE = 60
+
+BUSINESS_ACTIONS = {
+    "registration": "Registrations completed",
+    "payment": "Payments processed",
+    "invoice": "Invoices generated",
+    "badge": "Badge scans at entry",
+    "email": "Mailings sent",
+}
+
+KNOWN_SYSTEMS = {
+    "planning",
+    "crm",
+    "kassa",
+    "facturatie",
+    "monitoring",
+    "frontend",
+    "mailing",
+    "iot_gateway",
+    "identity-service",
+}
+
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
