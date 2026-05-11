@@ -606,7 +606,7 @@ def main() -> None:
         # Wait a bit for the connection to establish if needed, or just let publish queue handle it
         generate_daily_report()
         # Give the worker a moment to flush the queue
-        time.sleep(2)
+        _publish_queue.join()
         return
 
     next_report_date = None
