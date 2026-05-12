@@ -120,8 +120,7 @@ def rabbitmq_worker():
                 logger.debug("Published message to %s", task.queue)
             except Exception as exc:
                 logger.error("Failed to publish message: %s", exc)
-                # Put it back to retry if it's a connection issue? 
-                # For now just log and try to reconnect next loop
+                _publish_queue.put(task)  # Re-queue for retry
                 if connection and not connection.is_closed:
                     connection.close()
                 connection = None
@@ -607,7 +606,7 @@ def main() -> None:
         # Wait a bit for the connection to establish if needed, or just let publish queue handle it
         generate_daily_report()
         # Give the worker a moment to flush the queue
-        time.sleep(2)
+        _publish_queue.join()
         return
 
     next_report_date = None
