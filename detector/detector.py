@@ -78,9 +78,12 @@ logger = logging.getLogger("detector")
 es = Elasticsearch([ES_HOST], basic_auth=(ES_USER, ES_PASS) if ES_PASS else None)
 cooldown_list: dict[str, datetime] = {}
 
+MAX_PUBLISH_RETRIES = 5
+
 class PublishTask(NamedTuple):
     queue: str
     body: str
+    retry_count: int = 0
 
 _publish_queue: queue.Queue[PublishTask] = queue.Queue()
 _report_thread: threading.Thread | None = None
@@ -119,11 +122,22 @@ def rabbitmq_worker():
                 )
                 logger.debug("Published message to %s", task.queue)
             except Exception as exc:
-                logger.error("Failed to publish message: %s", exc)
-                _publish_queue.put(task)  # Re-queue for retry
-                if connection and not connection.is_closed:
-                    connection.close()
-                connection = None
+                if task.retry_count < MAX_PUBLISH_RETRIES:
+                    delay = min(2 ** task.retry_count, 30)
+                    logger.warning(
+                        "Failed to publish message (attempt %d/%d), retrying in %ds: %s",
+                        task.retry_count + 1, MAX_PUBLISH_RETRIES, delay, exc,
+                    )
+                    if connection and not connection.is_closed:
+                        connection.close()
+                    connection = None
+                    time.sleep(delay)
+                    _publish_queue.put(task._replace(retry_count=task.retry_count + 1))
+                else:
+                    logger.error(
+                        "Dropping message to queue '%s' after %d failed attempts: %s",
+                        task.queue, MAX_PUBLISH_RETRIES, exc,
+                    )
             finally:
                 _publish_queue.task_done()
 
@@ -603,10 +617,15 @@ def main() -> None:
     threading.Thread(target=rabbitmq_worker, daemon=True, name="RabbitMQWorker").start()
 
     if args.run_report:
-        # Wait a bit for the connection to establish if needed, or just let publish queue handle it
         generate_daily_report()
-        # Give the worker a moment to flush the queue
-        _publish_queue.join()
+        flush_timeout = 30
+        joiner = threading.Thread(target=_publish_queue.join, daemon=True)
+        joiner.start()
+        joiner.join(timeout=flush_timeout)
+        if joiner.is_alive():
+            logger.warning(
+                "Publish queue did not flush within %ds; exiting anyway", flush_timeout
+            )
         return
 
     next_report_date = None
