@@ -92,7 +92,7 @@ services:
 
   detector-service:
     image: ${DETECTOR_IMAGE:-ghcr.io/integrationproject-groep1/monitoring/detector:latest}
-    build: ./detector
+    build: .
     container_name: detector-service
     init: true
     environment:
