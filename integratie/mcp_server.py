@@ -404,6 +404,10 @@ async def get_logs_by_action(action: str, limit: int = 100) -> dict[str, Any]:
     Get log entries for a specific action type.
     Actions: registration, user, payment, invoice, session, calendar,
              email, wallet, refund, identity, xml_validation, system_error, badge
+
+    Raw event audit trail (every logged event). For the curated human-readable
+    activity log of the same events use `crm__get_recent_tasks` /
+    `crm__get_tasks_by_subject`.
     """
     return await get_recent_logs(limit=limit, action=action)
 
@@ -639,6 +643,10 @@ async def get_business_metrics(hours: int = 24) -> dict[str, Any]:
     """
     Platform-wide business event counts for the last N hours:
     registrations, payments, invoices, badge scans, mailings sent.
+
+    Event COUNTS only (how many payments were logged), not financial totals.
+    For invoiced revenue amounts use `facturatie__get_revenue_summary`;
+    for live POS sales use `kassa__get_sales_summary`.
     """
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     body  = {
@@ -670,42 +678,16 @@ async def get_business_metrics(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_business_metrics_today() -> dict[str, Any]:
-    """Business event counts since midnight UTC today."""
-    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    body = {
-        "size": 0,
-        "query": {
-            "bool": {
-                "filter": [
-                    {"terms": {"action.keyword": list(BUSINESS_ACTIONS)}},
-                    {"term":  {"level.keyword": "info"}},
-                    {"range": {"@timestamp": {"gte": midnight}}},
-                ]
-            }
-        },
-        "aggs": {"actions": {"terms": {"field": "action.keyword", "size": 20}}},
-    }
-    try:
-        result = await _search(LOGS_IDX, body)
-        counts = {b["key"]: b["doc_count"] for b in _buckets(result, "actions")}
-        return {
-            "since":         midnight,
-            "registrations": counts.get("registration", 0),
-            "payments":      counts.get("payment", 0),
-            "invoices":      counts.get("invoice", 0),
-            "badge_scans":   counts.get("badge", 0),
-            "emails_sent":   counts.get("email", 0),
-        }
-    except Exception as exc:
-        return _err(str(exc))
-
-
-@mcp.tool()
 async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
     """
     Extract total revenue from payment log messages for the last N hours.
     The detector parses €-amounts from log_message fields.
+
+    Log-derived proxy, NOT authoritative — sensitive to log format changes and
+    may miss off-platform transactions. For accounting use
+    `facturatie__get_revenue_summary`; for live POS use `kassa__get_sales_summary`.
+    Only use this tool when the admin explicitly asks for log-derived or
+    real-time trending revenue.
     """
     import re
     since   = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
@@ -746,7 +728,11 @@ async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_business_metrics_per_service(hours: int = 24) -> dict[str, Any]:
-    """Business action counts broken down per source service for the last N hours."""
+    """
+    Business action counts broken down per source service for the last N hours.
+
+    Event COUNTS per system, not financial totals. For revenue use Facturatie or Kassa.
+    """
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     body  = {
         "size": 0,
