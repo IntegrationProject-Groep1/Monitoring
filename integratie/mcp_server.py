@@ -41,7 +41,7 @@ _auth = (_ES_USER, _ES_PASS) if _ES_PASS else None
 _http = httpx.AsyncClient(timeout=15.0, auth=_auth)
 
 # Known systems (from logstash contract)
-HEARTBEAT_SYSTEMS = {"planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "mailing", "iot_gateway"}
+HEARTBEAT_SYSTEMS = {"planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "mailing", "identity-service"}
 LOG_SYSTEMS       = {"crm", "kassa", "facturatie", "frontend", "planning", "mailing", "identity-service", "iot_gateway"}
 LOG_LEVELS        = {"info", "warning", "error"}
 LOG_ACTIONS       = {"registration", "user", "payment", "invoice", "session", "calendar",
@@ -115,7 +115,7 @@ async def get_service_status() -> dict[str, Any]:
         "query": {"match_all": {}},
         "aggs": {
             "systems": {
-                "terms": {"field": "system.keyword", "size": 50},
+                "terms": {"field": "system", "size": 50},
                 "aggs": {
                     "latest": {
                         "top_hits": {
@@ -182,7 +182,7 @@ async def get_service_uptime(service: str) -> dict[str, Any]:
     """Get current uptime in seconds for a specific service (e.g. 'frontend', 'crm')."""
     body = {
         "size": 1,
-        "query": {"term": {"system.keyword": service}},
+        "query": {"term": {"system": service}},
         "sort": [{"@timestamp": {"order": "desc"}}],
         "_source": ["system", "status", "uptime_seconds", "@timestamp"],
     }
@@ -218,7 +218,7 @@ async def get_service_availability(service: str, hours: int = 24) -> dict[str, A
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"system.keyword": service}},
+                    {"term": {"system": service}},
                     {"range": {"@timestamp": {"gte": since}}},
                 ]
             }
@@ -254,7 +254,7 @@ async def get_heartbeat_timeline(service: str, hours: int = 6) -> dict[str, Any]
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"system.keyword": service}},
+                    {"term": {"system": service}},
                     {"range": {"@timestamp": {"gte": since}}},
                 ]
             }
@@ -296,7 +296,7 @@ async def get_health_scores() -> dict[str, Any]:
     hb_body = {
         "size": 0,
         "query": {"range": {"@timestamp": {"gte": since_24h}}},
-        "aggs": {"systems": {"terms": {"field": "system.keyword", "size": 50}}},
+        "aggs": {"systems": {"terms": {"field": "system", "size": 50}}},
     }
     # log counts by system + level
     log_body = {
@@ -304,8 +304,8 @@ async def get_health_scores() -> dict[str, Any]:
         "query": {"range": {"@timestamp": {"gte": since_24h}}},
         "aggs": {
             "systems": {
-                "terms": {"field": "system.keyword", "size": 50},
-                "aggs": {"levels": {"terms": {"field": "level.keyword", "size": 10}}},
+                "terms": {"field": "system", "size": 50},
+                "aggs": {"levels": {"terms": {"field": "level", "size": 10}}},
             }
         },
     }
@@ -368,11 +368,11 @@ async def get_recent_logs(
     """
     filters: list[dict] = []
     if level:
-        filters.append({"term": {"level.keyword": level.lower()}})
+        filters.append({"term": {"level": level.lower()}})
     if service:
-        filters.append({"term": {"system.keyword": service.lower()}})
+        filters.append({"term": {"system": service.lower()}})
     if action:
-        filters.append({"term": {"action.keyword": action.lower()}})
+        filters.append({"term": {"action": action.lower()}})
 
     body = {
         "size": min(limit, 500),
@@ -433,9 +433,9 @@ async def get_logs_in_timerange(
     """
     filters: list[dict] = [{"range": {"@timestamp": {"gte": start, "lte": end}}}]
     if level:
-        filters.append({"term": {"level.keyword": level.lower()}})
+        filters.append({"term": {"level": level.lower()}})
     if service:
-        filters.append({"term": {"system.keyword": service.lower()}})
+        filters.append({"term": {"system": service.lower()}})
 
     body = {
         "size": min(limit, 1000),
@@ -482,25 +482,37 @@ async def get_top_errors(
     """
     since   = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     filters: list[dict] = [
-        {"term":  {"level.keyword": "error"}},
+        {"term":  {"level": "error"}},
         {"range": {"@timestamp": {"gte": since}}},
     ]
     if service:
-        filters.append({"term": {"system.keyword": service.lower()}})
+        filters.append({"term": {"system": service.lower()}})
 
     body = {
         "size": 0,
         "query": {"bool": {"filter": filters}},
         "aggs": {
             "top_errors": {
-                "terms": {"field": "log_message.keyword", "size": limit}
+                "terms": {"field": "action", "size": limit},
+                "aggs": {
+                    "sample": {
+                        "top_hits": {
+                            "size": 1,
+                            "_source": ["log_message", "system"],
+                        }
+                    }
+                },
             }
         },
     }
     try:
         result  = await _search(LOGS_IDX, body)
         buckets = _buckets(result, "top_errors")
-        errors  = [{"message": b["key"], "count": b["doc_count"]} for b in buckets]
+        errors  = []
+        for b in buckets:
+            sample_hits = b.get("sample", {}).get("hits", {}).get("hits", [])
+            sample_msg  = sample_hits[0]["_source"].get("log_message", "") if sample_hits else ""
+            errors.append({"action": b["key"], "count": b["doc_count"], "sample_message": sample_msg})
         return {"errors": errors, "count": len(errors), "window_hours": hours}
     except Exception as exc:
         return _err(str(exc), errors=[])
@@ -515,8 +527,8 @@ async def get_log_volume_by_service(hours: int = 24) -> dict[str, Any]:
         "query": {"range": {"@timestamp": {"gte": since}}},
         "aggs": {
             "systems": {
-                "terms": {"field": "system.keyword", "size": 50},
-                "aggs": {"levels": {"terms": {"field": "level.keyword", "size": 5}}},
+                "terms": {"field": "system", "size": 50},
+                "aggs": {"levels": {"terms": {"field": "level", "size": 5}}},
             }
         },
     }
@@ -545,7 +557,7 @@ async def get_log_volume_by_level(hours: int = 24) -> dict[str, Any]:
     body  = {
         "size": 0,
         "query": {"range": {"@timestamp": {"gte": since}}},
-        "aggs": {"levels": {"terms": {"field": "level.keyword", "size": 10}}},
+        "aggs": {"levels": {"terms": {"field": "level", "size": 10}}},
     }
     try:
         result  = await _search(LOGS_IDX, body)
@@ -571,7 +583,7 @@ async def get_log_volume_by_action(hours: int = 24) -> dict[str, Any]:
     body  = {
         "size": 0,
         "query": {"range": {"@timestamp": {"gte": since}}},
-        "aggs": {"actions": {"terms": {"field": "action.keyword", "size": 50}}},
+        "aggs": {"actions": {"terms": {"field": "action", "size": 50}}},
     }
     try:
         result  = await _search(LOGS_IDX, body)
@@ -615,7 +627,7 @@ async def get_log_spike_detection(hours: int = 1) -> dict[str, Any]:
         return {
             "size": 0,
             "query": {"range": {"@timestamp": rng}},
-            "aggs": {"systems": {"terms": {"field": "system.keyword", "size": 50}}},
+            "aggs": {"systems": {"terms": {"field": "system", "size": 50}}},
         }
 
     try:
@@ -661,13 +673,13 @@ async def get_business_metrics(hours: int = 24) -> dict[str, Any]:
         "query": {
             "bool": {
                 "filter": [
-                    {"terms": {"action.keyword": list(BUSINESS_ACTIONS)}},
-                    {"term":  {"level.keyword": "info"}},
+                    {"terms": {"action": list(BUSINESS_ACTIONS)}},
+                    {"term":  {"level": "info"}},
                     {"range": {"@timestamp": {"gte": since}}},
                 ]
             }
         },
-        "aggs": {"actions": {"terms": {"field": "action.keyword", "size": 20}}},
+        "aggs": {"actions": {"terms": {"field": "action", "size": 20}}},
     }
     try:
         result  = await _search(LOGS_IDX, body)
@@ -702,7 +714,7 @@ async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
         "query": {
             "bool": {
                 "filter": [
-                    {"term":  {"action.keyword": "payment"}},
+                    {"term":  {"action": "payment"}},
                     {"range": {"@timestamp": {"gte": since}}},
                 ]
             }
@@ -744,15 +756,15 @@ async def get_business_metrics_per_service(hours: int = 24) -> dict[str, Any]:
         "query": {
             "bool": {
                 "filter": [
-                    {"terms": {"action.keyword": list(BUSINESS_ACTIONS)}},
+                    {"terms": {"action": list(BUSINESS_ACTIONS)}},
                     {"range": {"@timestamp": {"gte": since}}},
                 ]
             }
         },
         "aggs": {
             "systems": {
-                "terms": {"field": "system.keyword", "size": 20},
-                "aggs": {"actions": {"terms": {"field": "action.keyword", "size": 20}}},
+                "terms": {"field": "system", "size": 20},
+                "aggs": {"actions": {"terms": {"field": "action", "size": 20}}},
             }
         },
     }
@@ -888,17 +900,24 @@ async def get_quarantine_heartbeats(limit: int = 20) -> dict[str, Any]:
 async def get_quarantine_errors_by_type(days: int = 7) -> dict[str, Any]:
     """Most common parse error reasons in quarantine over the last N days."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # parse_error is a text field — fetch a sample and group counts in Python
     body  = {
-        "size": 0,
+        "size": 500,
         "query": {"range": {"@timestamp": {"gte": since}}},
-        "aggs": {"errors": {"terms": {"field": "parse_error.keyword", "size": 20}}},
+        "_source": ["parse_error"],
     }
     results = {}
     for label, index in [("heartbeats", HB_QUARANTINE), ("logs", LOG_QUARANTINE)]:
         try:
-            result  = await _search(index, body)
-            buckets = _buckets(result, "errors")
-            results[label] = [{"reason": b["key"], "count": b["doc_count"]} for b in buckets]
+            result = await _search(index, body)
+            counts: dict[str, int] = {}
+            for src in _hits(result):
+                reason = src.get("parse_error") or "unknown"
+                counts[reason] = counts.get(reason, 0) + 1
+            results[label] = sorted(
+                [{"reason": r, "count": c} for r, c in counts.items()],
+                key=lambda x: x["count"], reverse=True,
+            )
         except Exception:
             results[label] = []
     return {"window_days": days, **results}
@@ -930,10 +949,10 @@ async def get_error_spikes(hours: int = 1, threshold_pct: int = 150) -> dict[str
         return {
             "size": 0,
             "query": {"bool": {"filter": [
-                {"term": {"level.keyword": "error"}},
+                {"term": {"level": "error"}},
                 {"range": {"@timestamp": rng}},
             ]}},
-            "aggs": {"systems": {"terms": {"field": "system.keyword", "size": 50}}},
+            "aggs": {"systems": {"terms": {"field": "system", "size": 50}}},
         }
 
     try:
