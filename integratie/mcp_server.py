@@ -42,7 +42,7 @@ _http = httpx.AsyncClient(timeout=15.0, auth=_auth)
 
 # Known systems (from logstash contract)
 HEARTBEAT_SYSTEMS = {"planning", "crm", "kassa", "facturatie", "monitoring", "frontend", "mailing", "identity-service"}
-LOG_SYSTEMS       = {"crm", "kassa", "facturatie", "frontend", "planning", "mailing", "identity-service", "iot_gateway"}
+LOG_SYSTEMS       = {"crm", "kassa", "facturatie", "frontend", "planning", "mailing", "identity-service"}
 LOG_LEVELS        = {"info", "warning", "error"}
 LOG_ACTIONS       = {"registration", "user", "payment", "invoice", "session", "calendar",
                      "email", "wallet", "refund", "identity", "xml_validation", "system_error", "badge"}
