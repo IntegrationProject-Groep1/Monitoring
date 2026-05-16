@@ -170,7 +170,7 @@ async def get_service_status() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_offline_services() -> dict[str, Any]:
-    """Get all services that are currently offline or haven't sent a heartbeat recently."""
+    """Get all services that are currently offline or haven't sent a heartbeat within the expected interval. Returns service name, last seen timestamp, and expected heartbeat frequency. Use as a quick 'what's down right now?' check before investigating individual services."""
     result = await get_service_status()
     if "error" in result:
         return result
@@ -182,7 +182,7 @@ async def get_offline_services() -> dict[str, Any]:
 async def get_service_uptime(
     service: Annotated[str, Field(description="Service name. Valid values: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring', 'planning', 'mailing', 'identity-service'.")],
 ) -> dict[str, Any]:
-    """Get current uptime in seconds for a specific service."""
+    """Get the current continuous uptime (in seconds, hours, and days) for a specific service based on its latest heartbeat. Use to answer 'how long has [service] been running?' after checking get_service_status() for the service name."""
     body = {
         "size": 1,
         "query": {"term": {"system": service}},
@@ -619,8 +619,14 @@ async def get_log_volume_by_action(
 
 
 @mcp.tool()
-async def get_error_rate_per_service(hours: int = 24) -> dict[str, Any]:
-    """Error rate (errors / total logs × 100%) for each service over the last N hours."""
+async def get_error_rate_per_service(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24, max 168).")] = 24,
+) -> dict[str, Any]:
+    """
+    Error rate (errors / total logs × 100%) per service for the last N hours, sorted highest first.
+    Use to identify which service generates the most errors proportionally.
+    For raw counts use get_log_volume_by_service; for sudden spikes use get_error_spikes.
+    """
     result = await get_log_volume_by_service(hours=hours)
     if "error" in result:
         return result
@@ -634,10 +640,14 @@ async def get_error_rate_per_service(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_log_spike_detection(hours: int = 1) -> dict[str, Any]:
+async def get_log_spike_detection(
+    hours: Annotated[int, Field(description="Window size in hours to compare against 7-day trailing average (default 1, max 24).")] = 1,
+) -> dict[str, Any]:
     """
-    Compare log volume in the last N hours to the 7-day trailing average.
-    Returns trend per service so you can spot anomalies.
+    Compare total log volume in the last N hours against the 7-day trailing average per service.
+    Returns trend percentage per service sorted by largest deviation.
+    Use to spot anomalous log bursts from any cause (not just errors).
+    For error-only spikes use get_error_spikes instead.
     """
     now        = datetime.now(timezone.utc)
     since_now  = (now - timedelta(hours=hours)).isoformat()
@@ -722,55 +732,6 @@ async def get_business_metrics(
 
 
 @mcp.tool()
-async def get_payment_revenue(
-    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
-) -> dict[str, Any]:
-    """
-    Extract total revenue from payment log messages for the last N hours.
-    The detector parses €-amounts from log_message fields.
-
-    Log-derived proxy, NOT authoritative — sensitive to log format changes and
-    may miss off-platform transactions. For accounting use
-    `facturatie__get_revenue_summary`; for live POS use `kassa__get_sales_summary`.
-    Only use this tool when the admin explicitly asks for log-derived or
-    real-time trending revenue.
-    """
-    since   = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    body    = {
-        "size": 10000,
-        "query": {
-            "bool": {
-                "filter": [
-                    {"term":  {"action": "payment"}},
-                    {"range": {"@timestamp": {"gte": since}}},
-                ]
-            }
-        },
-        "_source": ["log_message", "@timestamp", "system"],
-    }
-    try:
-        result  = await _search(LOGS_IDX, body)
-        revenue = 0.0
-        parsed_entries = []
-        for src in _hits(result):
-            msg   = src.get("log_message", "")
-            match = _PAYMENT_AMOUNT_RE.search(msg)
-            if match:
-                amount = float((match.group(1) or match.group(2)).replace(",", "."))
-                revenue += amount
-                parsed_entries.append({"amount": amount, "message": msg, "timestamp": src.get("@timestamp")})
-        return {
-            "total_revenue_eur": round(revenue, 2),
-            "payment_events":    len(_hits(result)),
-            "parsed_amounts":    len(parsed_entries),
-            "window_hours":      hours,
-            "entries":           parsed_entries[:50],
-        }
-    except Exception as exc:
-        return _err(str(exc))
-
-
-@mcp.tool()
 async def get_business_metrics_per_service(
     hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
 ) -> dict[str, Any]:
@@ -816,7 +777,7 @@ async def get_business_metrics_per_service(
 async def get_report_history(
     limit: Annotated[int, Field(description="Max reports to return (default 30, max 100).")] = 30,
 ) -> dict[str, Any]:
-    """List the most recent daily platform reports archived in Elasticsearch."""
+    """List the most recent daily platform health reports archived in Elasticsearch, newest first. Returns report date, overall health score, number of systems down, and archive path. Use to answer 'how was the platform doing last week?' or to find a specific day's report."""
     body = {
         "size": min(limit, 100),
         "query": {"match_all": {}},
@@ -835,7 +796,7 @@ async def get_report_history(
 async def get_report_for_date(
     date: Annotated[str, Field(description="Date in format 'YYYY-MM-DD', e.g. '2026-05-15'.")],
 ) -> dict[str, Any]:
-    """Get archived daily report metadata for a specific date."""
+    """Get the archived daily platform health report for a specific date. Returns overall health score, systems that were down, and the archive path. Use when an admin asks about platform health on a particular day."""
     body = {
         "size": 1,
         "query": {"term": {"report_date": date}},
@@ -869,99 +830,6 @@ async def get_latest_report() -> dict[str, Any]:
     except Exception as exc:
         return _err(str(exc))
 
-
-# ─────────────────────────────────────────────
-#  QUARANTINE
-# ─────────────────────────────────────────────
-
-@mcp.tool()
-async def get_quarantine_stats(
-    days: Annotated[int, Field(description="Lookback window in days (default 7).")] = 7,
-) -> dict[str, Any]:
-    """
-    Count of quarantined (malformed) messages per day for both heartbeat
-    and log pipelines over the last N days.
-    """
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    async def _qcount(index: str) -> int:
-        try:
-            return await _count(index, {"range": {"@timestamp": {"gte": since}}})
-        except Exception:
-            return 0
-
-    hb_count  = await _qcount(HB_QUARANTINE)
-    log_count = await _qcount(LOG_QUARANTINE)
-    return {
-        "window_days":             days,
-        "quarantined_heartbeats":  hb_count,
-        "quarantined_logs":        log_count,
-        "total_quarantined":       hb_count + log_count,
-    }
-
-
-@mcp.tool()
-async def get_quarantine_logs(
-    limit: Annotated[int, Field(description="Max quarantined entries to return (default 20, max 100).")] = 20,
-) -> dict[str, Any]:
-    """Get the most recent quarantined log entries with their parse error reason."""
-    body = {
-        "size": min(limit, 100),
-        "query": {"match_all": {}},
-        "sort": [{"@timestamp": {"order": "desc"}}],
-        "_source": ["system", "level", "action", "log_message", "parse_error", "tags", "@timestamp", "message"],
-    }
-    try:
-        result = await _search(LOG_QUARANTINE, body)
-        return {"quarantined": _hits(result), "count": len(_hits(result))}
-    except Exception as exc:
-        return _err(str(exc), quarantined=[])
-
-
-@mcp.tool()
-async def get_quarantine_heartbeats(
-    limit: Annotated[int, Field(description="Max quarantined entries to return (default 20, max 100).")] = 20,
-) -> dict[str, Any]:
-    """Get the most recent quarantined heartbeat entries with their parse error reason."""
-    body = {
-        "size": min(limit, 100),
-        "query": {"match_all": {}},
-        "sort": [{"@timestamp": {"order": "desc"}}],
-        "_source": ["system", "status", "parse_error", "tags", "@timestamp", "message"],
-    }
-    try:
-        result = await _search(HB_QUARANTINE, body)
-        return {"quarantined": _hits(result), "count": len(_hits(result))}
-    except Exception as exc:
-        return _err(str(exc), quarantined=[])
-
-
-@mcp.tool()
-async def get_quarantine_errors_by_type(
-    days: Annotated[int, Field(description="Lookback window in days (default 7).")] = 7,
-) -> dict[str, Any]:
-    """Most common parse error reasons in quarantine over the last N days."""
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    # parse_error is a text field — fetch a sample and group counts in Python
-    body  = {
-        "size": 500,
-        "query": {"range": {"@timestamp": {"gte": since}}},
-        "_source": ["parse_error"],
-    }
-    results = {}
-    for label, index in [("heartbeats", HB_QUARANTINE), ("logs", LOG_QUARANTINE)]:
-        try:
-            result = await _search(index, body)
-            counts: dict[str, int] = {}
-            for src in _hits(result):
-                reason = src.get("parse_error") or "unknown"
-                counts[reason] = counts.get(reason, 0) + 1
-            results[label] = sorted(
-                [{"reason": r, "count": c} for r, c in counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )
-        except Exception:
-            results[label] = []
-    return {"window_days": days, **results}
 
 
 # ─────────────────────────────────────────────
@@ -1058,82 +926,11 @@ async def get_platform_health_overview() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-async def check_elasticsearch_status() -> dict[str, Any]:
-    """Check if Elasticsearch is reachable and return cluster health."""
-    try:
-        resp = await _http.get(f"{_ES_URL}/_cluster/health", timeout=5.0)
-        resp.raise_for_status()
-        data = resp.json()
-        return {
-            "status":                data.get("status"),
-            "cluster_name":          data.get("cluster_name"),
-            "number_of_nodes":       data.get("number_of_nodes"),
-            "active_primary_shards": data.get("active_primary_shards"),
-            "unassigned_shards":     data.get("unassigned_shards"),
-        }
-    except Exception as exc:
-        return {"status": "unreachable", "error": str(exc)}
-
-
 async def _gather(*coros):
     """Run coroutines concurrently; returns results in order, substituting {} on failure."""
     import asyncio
     results = await asyncio.gather(*coros, return_exceptions=True)
     return [r if not isinstance(r, Exception) else {} for r in results]
-
-
-@mcp.tool()
-async def discover_elasticsearch_schema() -> dict[str, Any]:
-    """
-    List all Elasticsearch indices and their document counts, and sample the actual
-    field names from logs and heartbeats documents.
-    Use this to debug why monitoring queries return no results — confirms whether
-    the expected indices and field names match what is actually stored.
-    """
-    try:
-        resp = await _http.get(f"{_ES_URL}/_cat/indices?format=json&h=index,docs.count,store.size,health", timeout=10.0)
-        resp.raise_for_status()
-        indices = resp.json()
-
-        expected_patterns = {
-            "logs-*": [i for i in indices if i["index"].startswith("logs-") and "quarantine" not in i["index"]],
-            "heartbeats-*": [i for i in indices if i["index"].startswith("heartbeats-") and "quarantine" not in i["index"]],
-            "reports-*": [i for i in indices if i["index"].startswith("reports-")],
-            "logs-quarantine-*": [i for i in indices if "quarantine" in i["index"] and "log" in i["index"]],
-            "heartbeats-quarantine-*": [i for i in indices if "quarantine" in i["index"] and "heartbeat" in i["index"]],
-        }
-
-        summary: dict = {}
-        for pattern, matched in expected_patterns.items():
-            total_docs = sum(int(i.get("docs.count", 0) or 0) for i in matched)
-            summary[pattern] = {"matched_indices": len(matched), "total_docs": total_docs, "indices": [i["index"] for i in matched]}
-
-        # Sample one real document from logs and heartbeats to verify field names
-        async def _sample(index: str) -> dict:
-            try:
-                r = await _http.post(f"{_ES_URL}/{index}/_search", json={"size": 1, "query": {"match_all": {}}}, timeout=5.0)
-                r.raise_for_status()
-                hits = r.json().get("hits", {}).get("hits", [])
-                return hits[0]["_source"] if hits else {}
-            except Exception:
-                return {}
-
-        log_sample = await _sample(LOGS_IDX)
-        hb_sample  = await _sample(HEARTBEATS_IDX)
-
-        return {
-            "total_indices": len(indices),
-            "all_indices": sorted(i["index"] for i in indices),
-            "expected_pattern_check": summary,
-            "log_sample_fields": sorted(log_sample.keys()) if log_sample else [],
-            "log_sample_document": log_sample,
-            "heartbeat_sample_fields": sorted(hb_sample.keys()) if hb_sample else [],
-            "heartbeat_sample_document": hb_sample,
-        }
-    except Exception as exc:
-        return {"error": str(exc), "es_url": _ES_URL}
-
 
 if __name__ == "__main__":
     mcp.run(
