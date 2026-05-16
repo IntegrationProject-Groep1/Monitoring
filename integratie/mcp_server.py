@@ -20,11 +20,16 @@ Environment variables:
     PORT             HTTP port to listen on (default: 8005)
 """
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 from fastmcp import FastMCP
+
+_PAYMENT_AMOUNT_RE = re.compile(
+    r"€\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|eur)\b"
+)
 
 mcp = FastMCP("monitoring")
 
@@ -219,6 +224,8 @@ async def get_service_availability(service: str, hours: int = 24) -> dict[str, A
             }
         },
     }
+    if hours <= 0:
+        hours = 1
     try:
         result   = await _search(HEARTBEATS_IDX, body)
         count    = result.get("hits", {}).get("total", {}).get("value", 0)
@@ -689,9 +696,7 @@ async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
     Only use this tool when the admin explicitly asks for log-derived or
     real-time trending revenue.
     """
-    import re
     since   = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    pattern = re.compile(r"€\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|eur)\b")
     body    = {
         "size": 10000,
         "query": {
@@ -710,7 +715,7 @@ async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
         parsed_entries = []
         for src in _hits(result):
             msg   = src.get("log_message", "")
-            match = pattern.search(msg)
+            match = _PAYMENT_AMOUNT_RE.search(msg)
             if match:
                 amount = float((match.group(1) or match.group(2)).replace(",", "."))
                 revenue += amount
@@ -904,6 +909,70 @@ async def get_quarantine_errors_by_type(days: int = 7) -> dict[str, Any]:
 # ─────────────────────────────────────────────
 
 @mcp.tool()
+async def get_error_spikes(hours: int = 1, threshold_pct: int = 150) -> dict[str, Any]:
+    """
+    Detect services where the error rate in the last `hours` is at least
+    `threshold_pct`% higher than the preceding equivalent window.
+    Returns only services with a spike — empty list means all clear.
+    Useful for catching newly introduced bugs without scanning all logs.
+    threshold_pct=150 means 150% higher (2.5× as many errors), not 150% total.
+    """
+    if hours <= 0:
+        hours = 1
+    now     = datetime.now(timezone.utc)
+    prev_start = (now - timedelta(hours=hours * 2)).isoformat()
+    curr_start = (now - timedelta(hours=hours)).isoformat()
+
+    def _err_body(gte: str, lte: str | None = None) -> dict:
+        rng: dict = {"gte": gte}
+        if lte:
+            rng["lte"] = lte
+        return {
+            "size": 0,
+            "query": {"bool": {"filter": [
+                {"term": {"level.keyword": "error"}},
+                {"range": {"@timestamp": rng}},
+            ]}},
+            "aggs": {"systems": {"terms": {"field": "system.keyword", "size": 50}}},
+        }
+
+    try:
+        import asyncio
+        prev_res, curr_res = await asyncio.gather(
+            _search(LOGS_IDX, _err_body(prev_start, curr_start)),
+            _search(LOGS_IDX, _err_body(curr_start)),
+        )
+        prev: dict[str, int] = {b["key"]: b["doc_count"] for b in _buckets(prev_res, "systems")}
+        curr: dict[str, int] = {b["key"]: b["doc_count"] for b in _buckets(curr_res, "systems")}
+
+        spikes = []
+        for system in set(curr) | set(prev):
+            c = curr.get(system, 0)
+            p = prev.get(system, 0)
+            if p == 0:
+                pct_increase = 100 if c > 0 else 0
+            else:
+                pct_increase = round((c - p) / p * 100)
+            if pct_increase >= threshold_pct:
+                spikes.append({
+                    "service": system,
+                    "errors_current_window": c,
+                    "errors_previous_window": p,
+                    "increase_pct": pct_increase,
+                })
+        spikes.sort(key=lambda s: s["increase_pct"], reverse=True)
+        return {
+            "spikes": spikes,
+            "count": len(spikes),
+            "window_hours": hours,
+            "threshold_pct": threshold_pct,
+            "all_clear": len(spikes) == 0,
+        }
+    except Exception as exc:
+        return _err(str(exc), spikes=[])
+
+
+@mcp.tool()
 async def get_platform_health_overview() -> dict[str, Any]:
     """
     Full admin dashboard: service health scores, top errors, business metrics
@@ -945,9 +1014,10 @@ async def check_elasticsearch_status() -> dict[str, Any]:
 
 
 async def _gather(*coros):
-    """Run coroutines concurrently and return results in order."""
+    """Run coroutines concurrently; returns results in order, substituting {} on failure."""
     import asyncio
-    return await asyncio.gather(*coros, return_exceptions=False)
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    return [r if not isinstance(r, Exception) else {} for r in results]
 
 
 if __name__ == "__main__":
