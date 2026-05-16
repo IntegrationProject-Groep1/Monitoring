@@ -1023,19 +1023,19 @@ async def _gather(*coros):
 @mcp.tool()
 async def discover_elasticsearch_schema() -> dict[str, Any]:
     """
-    List all Elasticsearch indices and their document counts.
+    List all Elasticsearch indices and their document counts, and sample the actual
+    field names from logs and heartbeats documents.
     Use this to debug why monitoring queries return no results — confirms whether
-    the expected indices (logs-*, heartbeats-*, reports-*) actually exist and have data.
+    the expected indices and field names match what is actually stored.
     """
     try:
         resp = await _http.get(f"{_ES_URL}/_cat/indices?format=json&h=index,docs.count,store.size,health", timeout=10.0)
         resp.raise_for_status()
         indices = resp.json()
 
-        # Summarise which of our expected patterns have data
         expected_patterns = {
-            "logs-*": [i for i in indices if i["index"].startswith("logs-")],
-            "heartbeats-*": [i for i in indices if i["index"].startswith("heartbeats-")],
+            "logs-*": [i for i in indices if i["index"].startswith("logs-") and "quarantine" not in i["index"]],
+            "heartbeats-*": [i for i in indices if i["index"].startswith("heartbeats-") and "quarantine" not in i["index"]],
             "reports-*": [i for i in indices if i["index"].startswith("reports-")],
             "logs-quarantine-*": [i for i in indices if "quarantine" in i["index"] and "log" in i["index"]],
             "heartbeats-quarantine-*": [i for i in indices if "quarantine" in i["index"] and "heartbeat" in i["index"]],
@@ -1046,10 +1046,27 @@ async def discover_elasticsearch_schema() -> dict[str, Any]:
             total_docs = sum(int(i.get("docs.count", 0) or 0) for i in matched)
             summary[pattern] = {"matched_indices": len(matched), "total_docs": total_docs, "indices": [i["index"] for i in matched]}
 
+        # Sample one real document from logs and heartbeats to verify field names
+        async def _sample(index: str) -> dict:
+            try:
+                r = await _http.post(f"{_ES_URL}/{index}/_search", json={"size": 1, "query": {"match_all": {}}}, timeout=5.0)
+                r.raise_for_status()
+                hits = r.json().get("hits", {}).get("hits", [])
+                return hits[0]["_source"] if hits else {}
+            except Exception:
+                return {}
+
+        log_sample = await _sample(LOGS_IDX)
+        hb_sample  = await _sample(HEARTBEATS_IDX)
+
         return {
             "total_indices": len(indices),
             "all_indices": sorted(i["index"] for i in indices),
             "expected_pattern_check": summary,
+            "log_sample_fields": sorted(log_sample.keys()) if log_sample else [],
+            "log_sample_document": log_sample,
+            "heartbeat_sample_fields": sorted(hb_sample.keys()) if hb_sample else [],
+            "heartbeat_sample_document": hb_sample,
         }
     except Exception as exc:
         return {"error": str(exc), "es_url": _ES_URL}
