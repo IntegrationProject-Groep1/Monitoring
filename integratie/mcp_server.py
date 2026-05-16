@@ -22,10 +22,11 @@ Environment variables:
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from fastmcp import FastMCP
+from pydantic import Field
 
 _PAYMENT_AMOUNT_RE = re.compile(
     r"€\s*([0-9]+(?:[.,][0-9]{1,2})?)|([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:EUR|eur)\b"
@@ -178,8 +179,10 @@ async def get_offline_services() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_service_uptime(service: str) -> dict[str, Any]:
-    """Get current uptime in seconds for a specific service (e.g. 'frontend', 'crm')."""
+async def get_service_uptime(
+    service: Annotated[str, Field(description="Service name. Valid values: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring', 'planning', 'mailing', 'identity-service'.")],
+) -> dict[str, Any]:
+    """Get current uptime in seconds for a specific service."""
     body = {
         "size": 1,
         "query": {"term": {"system": service}},
@@ -207,7 +210,10 @@ async def get_service_uptime(service: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_service_availability(service: str, hours: int = 24) -> dict[str, Any]:
+async def get_service_availability(
+    service: Annotated[str, Field(description="Service name: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring', 'planning', 'mailing', 'identity-service'.")],
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24, max 168).")] = 24,
+) -> dict[str, Any]:
     """
     Calculate availability percentage for a service over the last N hours.
     Based on actual heartbeat count vs expected (1 per second).
@@ -243,7 +249,10 @@ async def get_service_availability(service: str, hours: int = 24) -> dict[str, A
 
 
 @mcp.tool()
-async def get_heartbeat_timeline(service: str, hours: int = 6) -> dict[str, Any]:
+async def get_heartbeat_timeline(
+    service: Annotated[str, Field(description="Service name: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring', 'planning', 'mailing', 'identity-service'.")],
+    hours: Annotated[int, Field(description="Lookback window in hours (default 6, max 24). Each bucket = 1 minute.")] = 6,
+) -> dict[str, Any]:
     """
     Heartbeat count per minute for a service over the last N hours.
     Useful to spot gaps in service availability.
@@ -355,16 +364,14 @@ async def get_health_scores() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_recent_logs(
-    limit: int = 50,
-    level: str | None = None,
-    service: str | None = None,
-    action: str | None = None,
+    limit: Annotated[int, Field(description="Max log entries to return (default 50, max 500).")] = 50,
+    level: Annotated[str | None, Field(description="Filter by level: 'info', 'warning', or 'error'. Omit for all levels.")] = None,
+    service: Annotated[str | None, Field(description="Filter by service: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring', 'planning', 'mailing', 'identity-service'. Omit for all services.")] = None,
+    action: Annotated[str | None, Field(description="Filter by action: 'registration', 'payment', 'invoice', 'session', 'wallet', 'refund', 'badge', 'email', 'identity', 'system_error'. Omit for all.")] = None,
 ) -> dict[str, Any]:
     """
-    Get the most recent log entries. Optionally filter by:
-      level   — 'info', 'warning', or 'error'
-      service — e.g. 'frontend', 'crm', 'kassa'
-      action  — e.g. 'payment', 'registration', 'system_error'
+    Get the most recent log entries from Elasticsearch.
+    Returns: system (service name), level, log_message, action, @timestamp.
     """
     filters: list[dict] = []
     if level:
@@ -388,47 +395,54 @@ async def get_recent_logs(
 
 
 @mcp.tool()
-async def get_error_logs(limit: int = 50, service: str | None = None) -> dict[str, Any]:
+async def get_error_logs(
+    limit: Annotated[int, Field(description="Max entries (default 50).")] = 50,
+    service: Annotated[str | None, Field(description="Filter by service: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring'. Omit for all.")] = None,
+) -> dict[str, Any]:
     """Get the most recent error log entries, optionally filtered by service."""
     return await get_recent_logs(limit=limit, level="error", service=service)
 
 
 @mcp.tool()
-async def get_warning_logs(limit: int = 50, service: str | None = None) -> dict[str, Any]:
+async def get_warning_logs(
+    limit: Annotated[int, Field(description="Max entries (default 50).")] = 50,
+    service: Annotated[str | None, Field(description="Filter by service: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring'. Omit for all.")] = None,
+) -> dict[str, Any]:
     """Get the most recent warning log entries, optionally filtered by service."""
     return await get_recent_logs(limit=limit, level="warning", service=service)
 
 
 @mcp.tool()
-async def get_logs_by_service(service: str, limit: int = 100) -> dict[str, Any]:
-    """Get all recent log entries for a specific service (e.g. 'frontend', 'crm', 'kassa')."""
+async def get_logs_by_service(
+    service: Annotated[str, Field(description="Service name: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring', 'planning', 'mailing', 'identity-service'.")],
+    limit: Annotated[int, Field(description="Max log entries (default 100).")] = 100,
+) -> dict[str, Any]:
+    """Get all recent log entries for a specific service."""
     return await get_recent_logs(limit=limit, service=service)
 
 
 @mcp.tool()
-async def get_logs_by_action(action: str, limit: int = 100) -> dict[str, Any]:
+async def get_logs_by_action(
+    action: Annotated[str, Field(description="Action type to filter by. Valid values: 'registration', 'user', 'payment', 'invoice', 'session', 'calendar', 'email', 'wallet', 'refund', 'identity', 'xml_validation', 'system_error', 'badge'.")],
+    limit: Annotated[int, Field(description="Max log entries (default 100).")] = 100,
+) -> dict[str, Any]:
     """
     Get log entries for a specific action type.
-    Actions: registration, user, payment, invoice, session, calendar,
-             email, wallet, refund, identity, xml_validation, system_error, badge
-
-    Raw event audit trail (every logged event). For the curated human-readable
-    activity log of the same events use `crm__get_recent_tasks` /
-    `crm__get_tasks_by_subject`.
+    Raw event audit trail. For the curated human-readable activity log use crm__get_recent_tasks.
     """
     return await get_recent_logs(limit=limit, action=action)
 
 
 @mcp.tool()
 async def get_logs_in_timerange(
-    start: str,
-    end: str,
-    level: str | None = None,
-    service: str | None = None,
-    limit: int = 200,
+    start: Annotated[str, Field(description="Start timestamp in ISO 8601 format, e.g. '2026-05-15T08:00:00'.")],
+    end: Annotated[str, Field(description="End timestamp in ISO 8601 format, e.g. '2026-05-15T18:00:00'.")],
+    level: Annotated[str | None, Field(description="Filter by level: 'info', 'warning', 'error'. Omit for all.")] = None,
+    service: Annotated[str | None, Field(description="Filter by service: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring'. Omit for all.")] = None,
+    limit: Annotated[int, Field(description="Max log entries (default 200, max 1000).")] = 200,
 ) -> dict[str, Any]:
     """
-    Get log entries between two timestamps (ISO 8601, e.g. '2026-05-15T08:00:00').
+    Get log entries between two timestamps.
     Optionally filter by level and/or service.
     """
     filters: list[dict] = [{"range": {"@timestamp": {"gte": start, "lte": end}}}]
@@ -451,7 +465,10 @@ async def get_logs_in_timerange(
 
 
 @mcp.tool()
-async def search_logs(query: str, limit: int = 50) -> dict[str, Any]:
+async def search_logs(
+    query: Annotated[str, Field(description="Text to search for in log_message field (full-text match). Example: 'payment failed', 'connection refused'.")],
+    limit: Annotated[int, Field(description="Max results (default 50, max 200).")] = 50,
+) -> dict[str, Any]:
     """Full-text search in log messages across all services and levels."""
     body = {
         "size": min(limit, 200),
@@ -472,9 +489,9 @@ async def search_logs(query: str, limit: int = 50) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_top_errors(
-    limit: int = 20,
-    service: str | None = None,
-    hours: int = 24,
+    limit: Annotated[int, Field(description="Max distinct error types to return (default 20).")] = 20,
+    service: Annotated[str | None, Field(description="Filter by service: 'frontend', 'crm', 'kassa', 'facturatie', 'monitoring'. Omit for all.")] = None,
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
 ) -> dict[str, Any]:
     """
     Most frequent error messages in the last N hours.
@@ -519,7 +536,9 @@ async def get_top_errors(
 
 
 @mcp.tool()
-async def get_log_volume_by_service(hours: int = 24) -> dict[str, Any]:
+async def get_log_volume_by_service(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
+) -> dict[str, Any]:
     """Log count per service for the last N hours, broken down by level."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     body  = {
@@ -551,7 +570,9 @@ async def get_log_volume_by_service(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_log_volume_by_level(hours: int = 24) -> dict[str, Any]:
+async def get_log_volume_by_level(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
+) -> dict[str, Any]:
     """Overall info/warning/error distribution across all services for the last N hours."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     body  = {
@@ -577,7 +598,9 @@ async def get_log_volume_by_level(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_log_volume_by_action(hours: int = 24) -> dict[str, Any]:
+async def get_log_volume_by_action(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
+) -> dict[str, Any]:
     """Log count per action type (registration, payment, invoice, etc.) for the last N hours."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     body  = {
@@ -658,7 +681,9 @@ async def get_log_spike_detection(hours: int = 1) -> dict[str, Any]:
 # ─────────────────────────────────────────────
 
 @mcp.tool()
-async def get_business_metrics(hours: int = 24) -> dict[str, Any]:
+async def get_business_metrics(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
+) -> dict[str, Any]:
     """
     Platform-wide business event counts for the last N hours:
     registrations, payments, invoices, badge scans, mailings sent.
@@ -697,7 +722,9 @@ async def get_business_metrics(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
+async def get_payment_revenue(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
+) -> dict[str, Any]:
     """
     Extract total revenue from payment log messages for the last N hours.
     The detector parses €-amounts from log_message fields.
@@ -744,7 +771,9 @@ async def get_payment_revenue(hours: int = 24) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_business_metrics_per_service(hours: int = 24) -> dict[str, Any]:
+async def get_business_metrics_per_service(
+    hours: Annotated[int, Field(description="Lookback window in hours (default 24).")] = 24,
+) -> dict[str, Any]:
     """
     Business action counts broken down per source service for the last N hours.
 
@@ -784,7 +813,9 @@ async def get_business_metrics_per_service(hours: int = 24) -> dict[str, Any]:
 # ─────────────────────────────────────────────
 
 @mcp.tool()
-async def get_report_history(limit: int = 30) -> dict[str, Any]:
+async def get_report_history(
+    limit: Annotated[int, Field(description="Max reports to return (default 30, max 100).")] = 30,
+) -> dict[str, Any]:
     """List the most recent daily platform reports archived in Elasticsearch."""
     body = {
         "size": min(limit, 100),
@@ -801,8 +832,10 @@ async def get_report_history(limit: int = 30) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_report_for_date(date: str) -> dict[str, Any]:
-    """Get archived daily report metadata for a specific date (format: YYYY-MM-DD)."""
+async def get_report_for_date(
+    date: Annotated[str, Field(description="Date in format 'YYYY-MM-DD', e.g. '2026-05-15'.")],
+) -> dict[str, Any]:
+    """Get archived daily report metadata for a specific date."""
     body = {
         "size": 1,
         "query": {"term": {"report_date": date}},
@@ -842,7 +875,9 @@ async def get_latest_report() -> dict[str, Any]:
 # ─────────────────────────────────────────────
 
 @mcp.tool()
-async def get_quarantine_stats(days: int = 7) -> dict[str, Any]:
+async def get_quarantine_stats(
+    days: Annotated[int, Field(description="Lookback window in days (default 7).")] = 7,
+) -> dict[str, Any]:
     """
     Count of quarantined (malformed) messages per day for both heartbeat
     and log pipelines over the last N days.
@@ -865,7 +900,9 @@ async def get_quarantine_stats(days: int = 7) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_quarantine_logs(limit: int = 20) -> dict[str, Any]:
+async def get_quarantine_logs(
+    limit: Annotated[int, Field(description="Max quarantined entries to return (default 20, max 100).")] = 20,
+) -> dict[str, Any]:
     """Get the most recent quarantined log entries with their parse error reason."""
     body = {
         "size": min(limit, 100),
@@ -881,7 +918,9 @@ async def get_quarantine_logs(limit: int = 20) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_quarantine_heartbeats(limit: int = 20) -> dict[str, Any]:
+async def get_quarantine_heartbeats(
+    limit: Annotated[int, Field(description="Max quarantined entries to return (default 20, max 100).")] = 20,
+) -> dict[str, Any]:
     """Get the most recent quarantined heartbeat entries with their parse error reason."""
     body = {
         "size": min(limit, 100),
@@ -897,7 +936,9 @@ async def get_quarantine_heartbeats(limit: int = 20) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_quarantine_errors_by_type(days: int = 7) -> dict[str, Any]:
+async def get_quarantine_errors_by_type(
+    days: Annotated[int, Field(description="Lookback window in days (default 7).")] = 7,
+) -> dict[str, Any]:
     """Most common parse error reasons in quarantine over the last N days."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     # parse_error is a text field — fetch a sample and group counts in Python
@@ -928,7 +969,10 @@ async def get_quarantine_errors_by_type(days: int = 7) -> dict[str, Any]:
 # ─────────────────────────────────────────────
 
 @mcp.tool()
-async def get_error_spikes(hours: int = 1, threshold_pct: int = 150) -> dict[str, Any]:
+async def get_error_spikes(
+    hours: Annotated[int, Field(description="Window size in hours to compare (default 1). Compares last N hours vs previous N hours.")] = 1,
+    threshold_pct: Annotated[int, Field(description="Minimum % increase to flag as a spike (default 150 = 2.5× more errors than the previous window).")] = 150,
+) -> dict[str, Any]:
     """
     Detect services where the error rate in the last `hours` is at least
     `threshold_pct`% higher than the preceding equivalent window.
