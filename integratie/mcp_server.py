@@ -1020,6 +1020,41 @@ async def _gather(*coros):
     return [r if not isinstance(r, Exception) else {} for r in results]
 
 
+@mcp.tool()
+async def discover_elasticsearch_schema() -> dict[str, Any]:
+    """
+    List all Elasticsearch indices and their document counts.
+    Use this to debug why monitoring queries return no results — confirms whether
+    the expected indices (logs-*, heartbeats-*, reports-*) actually exist and have data.
+    """
+    try:
+        resp = await _http.get(f"{_ES_URL}/_cat/indices?format=json&h=index,docs.count,store.size,health", timeout=10.0)
+        resp.raise_for_status()
+        indices = resp.json()
+
+        # Summarise which of our expected patterns have data
+        expected_patterns = {
+            "logs-*": [i for i in indices if i["index"].startswith("logs-")],
+            "heartbeats-*": [i for i in indices if i["index"].startswith("heartbeats-")],
+            "reports-*": [i for i in indices if i["index"].startswith("reports-")],
+            "logs-quarantine-*": [i for i in indices if "quarantine" in i["index"] and "log" in i["index"]],
+            "heartbeats-quarantine-*": [i for i in indices if "quarantine" in i["index"] and "heartbeat" in i["index"]],
+        }
+
+        summary: dict = {}
+        for pattern, matched in expected_patterns.items():
+            total_docs = sum(int(i.get("docs.count", 0) or 0) for i in matched)
+            summary[pattern] = {"matched_indices": len(matched), "total_docs": total_docs, "indices": [i["index"] for i in matched]}
+
+        return {
+            "total_indices": len(indices),
+            "all_indices": sorted(i["index"] for i in indices),
+            "expected_pattern_check": summary,
+        }
+    except Exception as exc:
+        return {"error": str(exc), "es_url": _ES_URL}
+
+
 if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
